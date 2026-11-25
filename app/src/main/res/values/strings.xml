@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">استوديو صوت ميمو</string>
+    <string name="tab_transcribe">تفريغ</string>
+    <string name="tab_speak">النطق</string>
+    <string name="tab_settings">الإعدادات</string>
+    <string name="pick_video">اختار فيديو</string>
+    <string name="pick_audio">اختار ملف صوتي</string>
+    <string name="transcribe_now">فرّغ</string>
+    <string name="copy_text">نسخ النص</string>
+    <string name="save_txt">حفظ كملف نصي</string>
+    <string name="send_to_speak">ابعته للنطق</string>
+    <string name="speak_generate">ولّد الصوت</string>
+    <string name="play">تشغيل</string>
+    <string name="stop">إيقاف</string>
+    <string name="download_audio">حمّل الصوت</string>
+    <string name="from_txt_pdf">من ملف TXT أو PDF</string>
+    <string name="from_image">من صورة</string>
+    <string name="from_camera">من الكاميرا</string>
+    <string name="from_transcription">من آخر تفريغ</string>
+    <string name="gender">الصوت</string>
+    <string name="male">راجل</string>
+    <string name="female">ست</string>
+    <string name="language">اللغة</string>
+    <string name="egyptian">مصري</string>
+    <string name="fusha">فصحى</string>
+    <string name="style">الأسلوب</string>
+    <string name="style_normal">قراءة عادية</string>
+    <string name="style_poetry">إلقاء شعر</string>
+    <string name="style_story">سرد قصص</string>
+    <string name="settings_api_key">مفتاح Gemini API</string>
+    <string name="save">حفظ</string>
+    <string name="test_key">اختبر المفتاح</string>
+</resources>
