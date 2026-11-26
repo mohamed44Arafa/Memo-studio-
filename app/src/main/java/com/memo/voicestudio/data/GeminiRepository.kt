@@ -435,7 +435,13 @@ class GeminiRepository(private val context: Context) {
     ): Result<File> {
         return try {
             onStatus("بنحوّل النص لحوار بودكاست…")
-            val script = generatePodcastScript(text, languageCode, apiKey)
+            val script = try {
+                generatePodcastScript(text, languageCode, apiKey)
+            } catch (e: ServiceOverloadedException) {
+                onStatus("Gemini مشغول دلوقتي — هنستنى شوية ونحاول تاني…")
+                delay(65_000)
+                generatePodcastScript(text, languageCode, apiKey)
+            }
             val chunks = splitPodcastScript(script)
             if (chunks.isEmpty()) {
                 throw IllegalStateException("مقدرناش نحوّل النص لحوار — جرّب نص أقصر أو أوضح.")
@@ -488,6 +494,7 @@ class GeminiRepository(private val context: Context) {
             api.generateContent(TEXT_MODEL, apiKey, body)
         }
         if (resp.code() == 429) throw RateLimitException()
+        if (resp.code() == 503) throw ServiceOverloadedException()
         if (!resp.isSuccessful) {
             throw IllegalStateException("خطأ من الخدمة (${resp.code()})${serviceErrorDetail(resp)}")
         }
