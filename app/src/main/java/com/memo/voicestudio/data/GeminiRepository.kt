@@ -7,7 +7,6 @@ import com.google.gson.Gson
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
-import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -217,14 +216,8 @@ class GeminiRepository(private val context: Context) {
         val metadata = "{\"file\":{\"displayName\":\"${file.name}\"}}"
         val body = MultipartBody.Builder(boundary)
             .setType("multipart/related".toMediaType())
-            .addPart(
-                Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
-                metadata.toRequestBody("application/json".toMediaType())
-            )
-            .addPart(
-                Headers.headersOf("Content-Type", mimeType),
-                file.asRequestBody(mimeType.toMediaType())
-            )
+            .addPart(metadata.toRequestBody("application/json".toMediaType()))
+            .addPart(file.asRequestBody(mimeType.toMediaType()))
             .build()
         val request = Request.Builder()
             .url("https://generativelanguage.googleapis.com/upload/v1beta/files?key=$apiKey")
