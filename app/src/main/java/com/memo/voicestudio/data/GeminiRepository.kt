@@ -187,11 +187,12 @@ class GeminiRepository(private val context: Context) {
     private suspend fun transcribeFile(fileName: String, mimeType: String, apiKey: String): String {
         // حسب توثيق Google الرسمي لموديل gemini-3.5-transcribe:
         // الطلب يحتوي على ملف الصوت فقط، بدون أي نص إضافي وبدون generationConfig.
+        // لازم الرابط الكامل للملف، مش الاسم المختصر "files/..." — الخدمة بترفض الاسم المختصر.
         val body = GenerateRequest(
             contents = listOf(
                 Content(
                     parts = listOf(
-                        Part(fileData = FileData(mimeType, "files/$fileName"))
+                        Part(fileData = FileData(mimeType, "https://generativelanguage.googleapis.com/v1beta/files/$fileName"))
                     )
                 )
             )
