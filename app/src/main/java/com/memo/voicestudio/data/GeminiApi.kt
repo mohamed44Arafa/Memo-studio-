@@ -67,7 +67,17 @@ data class GenerationConfig(
 
 data class SpeechConfig(
     val voiceConfig: VoiceConfig? = null,
-    val languageCode: String? = null
+    val languageCode: String? = null,
+    val multiSpeakerVoiceConfig: MultiSpeakerVoiceConfig? = null
+)
+
+data class MultiSpeakerVoiceConfig(
+    val speakerVoiceConfigs: List<SpeakerVoiceConfig>
+)
+
+data class SpeakerVoiceConfig(
+    val speaker: String,
+    val voiceConfig: VoiceConfig
 )
 
 data class VoiceConfig(
@@ -109,4 +119,10 @@ data class FileInfoResponse(
     val sizeBytes: String?,
     val state: String?,
     val uri: String?
+)
+
+// ---------- رد Groq (تفريغ احتياطي) ----------
+
+data class GroqTranscriptionResponse(
+    val text: String?
 )

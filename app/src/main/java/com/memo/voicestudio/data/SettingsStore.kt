@@ -32,10 +32,25 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("language", "egyptian") ?: "egyptian"
         set(value) = prefs.edit().putString("language", value).apply()
 
-    /** "normal" أو "poetry" أو "story" */
+    /** "normal" أو "poetry" أو "story" أو "podcast" */
     var style: String
         get() = prefs.getString("style", "normal") ?: "normal"
         set(value) = prefs.edit().putString("style", value).apply()
+
+    /** مفتاح Groq المجاني (احتياطي للتفريغ) */
+    var groqApiKey: String
+        get() = prefs.getString("groq_api_key", "") ?: ""
+        set(value) = prefs.edit().putString("groq_api_key", value).apply()
+
+    /** مفتاح Azure Speech (احتياطي للصوت) */
+    var azureApiKey: String
+        get() = prefs.getString("azure_api_key", "") ?: ""
+        set(value) = prefs.edit().putString("azure_api_key", value).apply()
+
+    /** منطقة Azure (مثال: westeurope) */
+    var azureRegion: String
+        get() = prefs.getString("azure_region", "westeurope") ?: "westeurope"
+        set(value) = prefs.edit().putString("azure_region", value).apply()
 
     /** اسم صوت Gemini المختار (من قائمة الأصوات الرسمية) */
     var voiceName: String

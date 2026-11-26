@@ -55,6 +55,14 @@ class GeminiRepository(private val context: Context) {
         const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe"
         const val TTS_MODEL = "gemini-2.5-flash-preview-tts"
         const val VISION_MODEL = "gemini-2.5-flash"
+        const val TEXT_MODEL = "gemini-2.5-flash"
+        const val PODCAST_HOST_VOICE = "Zephyr"
+        const val PODCAST_GUEST_VOICE = "Charon"
+        const val GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+        const val GROQ_STT_MODEL = "whisper-large-v3-turbo"
+        const val GROQ_MAX_FILE_BYTES = 25L * 1024L * 1024L
+        const val AZURE_EG_FEMALE_VOICE = "ar-EG-SalmaNeural"
+        const val AZURE_EG_MALE_VOICE = "ar-EG-ShakirNeural"
 
         /** أقصى طول للجزء الواحد عند التفريغ (50 دقيقة — أقل من حد الساعة) */
         const val MAX_SEGMENT_MS = 50L * 60L * 1000L
@@ -117,7 +125,8 @@ class GeminiRepository(private val context: Context) {
         source: File,
         mimeType: String,
         apiKey: String,
-        onStatus: (String) -> Unit
+        onStatus: (String) -> Unit,
+        groqApiKey: String = ""
     ): Result<String> {
         if (apiKey.isBlank()) {
             return Result.failure(IllegalStateException("لا يوجد مفتاح — أدخل مفتاح Gemini من الإعدادات أولاً."))
@@ -152,7 +161,16 @@ class GeminiRepository(private val context: Context) {
                 onStatus("بنستنى تجهيز الجزء ${i + 1}…")
                 waitForFileActive(fileName, apiKey)
                 onStatus("بنفرّغ الجزء ${i + 1} من ${segments.size}…")
-                val text = transcribeFileWithRetry(fileName, audioMime, apiKey)
+                val text = if (groqApiKey.isBlank()) {
+                    transcribeFileWithRetry(fileName, audioMime, apiKey)
+                } else {
+                    try {
+                        transcribeFile(fileName, audioMime, apiKey)
+                    } catch (e: RateLimitException) {
+                        onStatus("ليمت Gemini خلص — بنكمّل مع Groq…")
+                        transcribeWithGroq(seg, audioMime, groqApiKey)
+                    }
+                }
                 out.append(text).append("\n")
             }
             Result.success(out.toString().trim())
@@ -270,7 +288,10 @@ class GeminiRepository(private val context: Context) {
         languageCode: String,
         style: String,
         apiKey: String,
-        onStatus: (String) -> Unit
+        onStatus: (String) -> Unit,
+        azureApiKey: String = "",
+        azureRegion: String = "westeurope",
+        gender: String = "female"
     ): Result<File> {
         if (apiKey.isBlank()) {
             return Result.failure(IllegalStateException("لا يوجد مفتاح — أدخل مفتاح Gemini من الإعدادات أولاً."))
@@ -278,12 +299,22 @@ class GeminiRepository(private val context: Context) {
         if (text.isBlank()) {
             return Result.failure(IllegalStateException("مفيش نص — اكتب نص أو استخرجه من ملف أو صورة أولاً."))
         }
+        if (style == "podcast") {
+            return generatePodcast(text, languageCode, apiKey, onStatus, azureApiKey, azureRegion)
+        }
         return try {
             val chunks = splitTextForTts(text, style)
+            val azureVoice = if (gender == "male") AZURE_EG_MALE_VOICE else AZURE_EG_FEMALE_VOICE
             val pcm = ByteArrayOutputStream()
             for ((i, chunk) in chunks.withIndex()) {
                 onStatus("بنولّد الصوت… جزء ${i + 1} من ${chunks.size}")
-                val bytes = speakChunkWithRetry(chunk, voiceName, languageCode, style, apiKey)
+                val bytes = try {
+                    speakChunkWithRetry(chunk, voiceName, languageCode, style, apiKey)
+                } catch (e: RateLimitException) {
+                    if (azureApiKey.isBlank()) throw e
+                    onStatus("ليمت Gemini للصوت خلص — بنكمّل مع Azure…")
+                    speakChunkWithAzure(chunk, azureVoice, azureApiKey, azureRegion)
+                }
                 pcm.write(bytes)
             }
             val wav = File(context.cacheDir, "voice_${System.currentTimeMillis()}.wav")
@@ -299,6 +330,218 @@ class GeminiRepository(private val context: Context) {
             )
         }
     }
+
+    // ---------------- وضع البودكاست (حوار بين صوتين) ----------------
+
+    private suspend fun generatePodcast(
+        text: String,
+        languageCode: String,
+        apiKey: String,
+        onStatus: (String) -> Unit,
+        azureApiKey: String = "",
+        azureRegion: String = "westeurope"
+    ): Result<File> {
+        return try {
+            onStatus("بنحوّل النص لحوار بودكاست…")
+            val script = generatePodcastScript(text, languageCode, apiKey)
+            val chunks = splitPodcastScript(script)
+            if (chunks.isEmpty()) {
+                throw IllegalStateException("مقدرناش نحوّل النص لحوار — جرّب نص أقصر أو أوضح.")
+            }
+            val pcm = ByteArrayOutputStream()
+            for ((i, chunk) in chunks.withIndex()) {
+                onStatus("بنولّد صوت البودكاست… جزء ${i + 1} من ${chunks.size}")
+                val bytes = try {
+                    speakPodcastChunkWithRetry(chunk, languageCode, apiKey)
+                } catch (e: RateLimitException) {
+                    if (azureApiKey.isBlank()) throw e
+                    onStatus("ليمت Gemini للصوت خلص — بنكمّل مع Azure…")
+                    speakPodcastChunkWithAzure(chunk, azureApiKey, azureRegion)
+                }
+                pcm.write(bytes)
+            }
+            val wav = File(context.cacheDir, "podcast_${System.currentTimeMillis()}.wav")
+            wav.writeBytes(AudioUtils.pcmToWav(pcm.toByteArray(), 24000))
+            Result.success(wav)
+        } catch (e: RateLimitException) {
+            Result.failure(
+                IllegalStateException("وصلت للحد المجاني لليوم — استنى شوية وجرّب تاني.")
+            )
+        } catch (e: Exception) {
+            Result.failure(
+                IllegalStateException("حصلت مشكلة أثناء توليد البودكاست: ${e.message ?: "خطأ غير معروف"}")
+            )
+        }
+    }
+
+    private suspend fun generatePodcastScript(text: String, languageCode: String, apiKey: String): String {
+        val dialect = if (languageCode == "ar-EG") "باللهجة المصرية" else "باللغة العربية الفصحى"
+        val prompt = "حوّل النص التالي إلى حوار بودكاست طبيعي $dialect بين مقدّم وضيف خبير.\n" +
+            "قواعد:\n" +
+            "- كل سطر يبدأ بـ \"Speaker1:\" للمقدّم أو \"Speaker2:\" للضيف، ولا تكتب أي سطر آخر.\n" +
+            "- المقدّم يسأل أسئلة قصيرة، والضيف يشرح ببساطة ووضوح.\n" +
+            "- غطِّ أهم المعلومات اللي في النص، من غير ما تضيف معلومات من برّه النص.\n" +
+            "- الحوار مختصر، لا يزيد عن 2000 كلمة.\n\n" +
+            "النص:\n$text"
+        val body = GenerateRequest(
+            contents = listOf(Content(parts = listOf(Part(text = prompt))))
+        )
+        val resp = withContext(Dispatchers.IO) {
+            api.generateContent(TEXT_MODEL, apiKey, body)
+        }
+        if (resp.code() == 429) throw RateLimitException()
+        if (!resp.isSuccessful) {
+            throw IllegalStateException("خطأ من الخدمة (${resp.code()})${serviceErrorDetail(resp)}")
+        }
+        return resp.body()?.candidates?.firstOrNull()?.content?.parts
+            ?.mapNotNull { it.text }
+            ?.joinToString("") ?: ""
+    }
+
+    private fun splitPodcastScript(script: String): List<String> {
+        val lines = script.lines()
+            .map { it.trim() }
+            .filter { it.startsWith("Speaker1:") || it.startsWith("Speaker2:") }
+        val chunks = mutableListOf<String>()
+        val cur = StringBuilder()
+        for (line in lines) {
+            if (cur.length + line.length + 1 > MAX_TTS_CHARS && cur.isNotEmpty()) {
+                chunks.add(cur.toString().trim())
+                cur.clear()
+            }
+            if (cur.isNotEmpty()) cur.append("\n")
+            cur.append(line)
+        }
+        if (cur.isNotEmpty()) chunks.add(cur.toString().trim())
+        return chunks
+    }
+
+    private suspend fun speakPodcastChunkWithRetry(
+        chunk: String,
+        languageCode: String,
+        apiKey: String
+    ): ByteArray {
+        var attempt = 0
+        while (true) {
+            attempt++
+            try {
+                return speakPodcastChunk(chunk, languageCode, apiKey)
+            } catch (e: RateLimitException) {
+                if (attempt >= 2) throw e
+                delay(65_000)
+            }
+        }
+    }
+
+    private suspend fun speakPodcastChunk(chunk: String, languageCode: String, apiKey: String): ByteArray {
+        val fullText = "اقرأ الحوار التالي بصوتين: Speaker1 مقدّم بودكاست متحمس، وSpeaker2 ضيف خبير هادئ:\n" + chunk
+        val body = GenerateRequest(
+            contents = listOf(Content(parts = listOf(Part(text = fullText)))),
+            generationConfig = GenerationConfig(
+                responseModalities = listOf("AUDIO"),
+                speechConfig = SpeechConfig(
+                    languageCode = languageCode,
+                    multiSpeakerVoiceConfig = MultiSpeakerVoiceConfig(
+                        listOf(
+                            SpeakerVoiceConfig("Speaker1", VoiceConfig(PrebuiltVoiceConfig(PODCAST_HOST_VOICE))),
+                            SpeakerVoiceConfig("Speaker2", VoiceConfig(PrebuiltVoiceConfig(PODCAST_GUEST_VOICE)))
+                        )
+                    )
+                )
+            )
+        )
+        val resp = withContext(Dispatchers.IO) {
+            api.generateContent(TTS_MODEL, apiKey, body)
+        }
+        if (resp.code() == 429) throw RateLimitException()
+        if (!resp.isSuccessful) {
+            throw IllegalStateException("خطأ من خدمة الصوت (${resp.code()})${serviceErrorDetail(resp)}")
+        }
+        val data = resp.body()?.candidates?.firstOrNull()?.content?.parts
+            ?.firstOrNull { it.inlineData != null }?.inlineData?.data
+            ?: throw IllegalStateException("الخدمة رجّعت صوت فاضي")
+        return Base64.decode(data, Base64.DEFAULT)
+    }
+
+    // ---------------- المفاتيح الاحتياطية (Groq للتفريغ + Azure للصوت) ----------------
+
+    private suspend fun transcribeWithGroq(file: File, mimeType: String, groqKey: String): String {
+        if (file.length() > GROQ_MAX_FILE_BYTES) {
+            throw IllegalStateException("الجزء أكبر من 25 ميجا — Groq مش بيقبل ملفات أكبر من كده.")
+        }
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("file", file.name, file.asRequestBody(mimeType.toMediaType()))
+            .addFormDataPart("model", GROQ_STT_MODEL)
+            .addFormDataPart("language", "ar")
+            .addFormDataPart("response_format", "json")
+            .build()
+        val request = Request.Builder()
+            .url(GROQ_STT_URL)
+            .addHeader("Authorization", "Bearer $groqKey")
+            .post(body)
+            .build()
+        return withContext(Dispatchers.IO) {
+            http.newCall(request).execute().use { resp ->
+                if (resp.code == 429) throw RateLimitException()
+                if (!resp.isSuccessful) {
+                    throw IllegalStateException("خطأ من Groq (${resp.code})")
+                }
+                val parsed = gson.fromJson(resp.body?.string(), GroqTranscriptionResponse::class.java)
+                parsed.text?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: throw IllegalStateException("Groq رجّع نص فاضي")
+            }
+        }
+    }
+
+    private suspend fun speakChunkWithAzure(
+        chunk: String,
+        azureVoice: String,
+        azureKey: String,
+        azureRegion: String
+    ): ByteArray {
+        val ssml = "<speak version='1.0' xml:lang='ar-EG'><voice xml:lang='ar-EG' name='$azureVoice'>${escapeXml(chunk)}</voice></speak>"
+        val request = Request.Builder()
+            .url("https://$azureRegion.tts.speech.microsoft.com/cognitiveservices/v1")
+            .addHeader("Ocp-Apim-Subscription-Key", azureKey)
+            .addHeader("Content-Type", "application/ssml+xml")
+            .addHeader("X-Microsoft-OutputFormat", "raw-24khz-16bit-mono-pcm")
+            .addHeader("User-Agent", "memo-voice-studio")
+            .post(ssml.toRequestBody("application/ssml+xml".toMediaType()))
+            .build()
+        return withContext(Dispatchers.IO) {
+            http.newCall(request).execute().use { resp ->
+                if (resp.code == 429) throw RateLimitException()
+                if (!resp.isSuccessful) {
+                    throw IllegalStateException("خطأ من Azure (${resp.code})")
+                }
+                resp.body?.bytes() ?: throw IllegalStateException("Azure رجّع صوت فاضي")
+            }
+        }
+    }
+
+    private suspend fun speakPodcastChunkWithAzure(
+        chunk: String,
+        azureKey: String,
+        azureRegion: String
+    ): ByteArray {
+        val out = ByteArrayOutputStream()
+        for (line in chunk.lines()) {
+            val trimmed = line.trim()
+            if (trimmed.isBlank()) continue
+            val (voice, spoken) = when {
+                trimmed.startsWith("Speaker1:") -> AZURE_EG_FEMALE_VOICE to trimmed.removePrefix("Speaker1:").trim()
+                trimmed.startsWith("Speaker2:") -> AZURE_EG_MALE_VOICE to trimmed.removePrefix("Speaker2:").trim()
+                else -> continue
+            }
+            if (spoken.isBlank()) continue
+            out.write(speakChunkWithAzure(spoken, voice, azureKey, azureRegion))
+        }
+        return out.toByteArray()
+    }
+
+    private fun escapeXml(text: String): String =
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     private suspend fun speakChunkWithRetry(
         chunk: String,

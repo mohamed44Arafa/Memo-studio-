@@ -38,6 +38,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var voiceName by mutableStateOf(settings.voiceName.ifBlank { defaultVoice() })
         private set
+    var groqApiKey by mutableStateOf(settings.groqApiKey)
+        private set
+    var azureApiKey by mutableStateOf(settings.azureApiKey)
+        private set
+    var azureRegion by mutableStateOf(settings.azureRegion)
+        private set
     var keyTest by mutableStateOf<String?>(null)
         private set
     var isTestingKey by mutableStateOf(false)
@@ -46,6 +52,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveApiKey(value: String) {
         apiKey = value.trim()
         settings.apiKey = apiKey
+    }
+
+    fun saveGroqApiKey(value: String) {
+        groqApiKey = value
+        settings.groqApiKey = value
+    }
+
+    fun saveAzureApiKey(value: String) {
+        azureApiKey = value
+        settings.azureApiKey = value
+    }
+
+    fun saveAzureRegion(value: String) {
+        azureRegion = value
+        settings.azureRegion = value
     }
 
     fun saveGender(value: String) {
@@ -86,6 +107,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val s = when (style) {
             "poetry" -> "إلقاء شعر"
             "story" -> "سرد قصص"
+            "podcast" -> "بودكاست (صوتين)"
             else -> "قراءة عادية"
         }
         return "صوت $g — $l — $s (صوت: $voiceName)"
@@ -119,9 +141,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             isTranscribing = true
             transStatus = "بنبدأ…"
             transResult = ""
-            val result = repo.transcribe(file, mimeType, apiKey.trim()) { status ->
-                transStatus = status
-            }
+            val result = repo.transcribe(
+                file, mimeType, apiKey.trim(),
+                onStatus = { status -> transStatus = status },
+                groqApiKey = groqApiKey.trim()
+            )
             withContext(Dispatchers.Main) {
                 isTranscribing = false
                 result
@@ -169,8 +193,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             speakStatus = "بنجهّز الصوت…"
             audioFile = null
             val result = repo.synthesize(
-                text, voiceName, languageCode(), style, apiKey.trim()
-            ) { status -> speakStatus = status }
+                text, voiceName, languageCode(), style, apiKey.trim(),
+                onStatus = { status -> speakStatus = status },
+                azureApiKey = azureApiKey.trim(),
+                azureRegion = azureRegion.trim(),
+                gender = gender
+            )
             withContext(Dispatchers.Main) {
                 isSpeaking = false
                 result

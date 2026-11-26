@@ -218,6 +218,18 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                 label = { Text("سرد قصص", fontSize = 16.sp) }
             )
         }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = viewModel.style == "podcast",
+                onClick = { viewModel.saveStyle("podcast") },
+                label = { Text("🎙️ بودكاست", fontSize = 16.sp) }
+            )
+        }
+        if (viewModel.style == "podcast") {
+            Spacer(Modifier.height(4.dp))
+            Text("حوار بين صوتين ثابتين: مقدمة وضيف — التطبيق بيحوّل النص لحوار الأول وبعدين ينطقه.", fontSize = 14.sp)
+        }
         Spacer(Modifier.height(12.dp))
         OutlinedButton(
             onClick = { voiceMenuExpanded = true },

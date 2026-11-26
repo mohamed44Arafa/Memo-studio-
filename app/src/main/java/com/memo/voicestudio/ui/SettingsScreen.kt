@@ -30,6 +30,9 @@ import androidx.compose.ui.unit.sp
 fun SettingsScreen(viewModel: MainViewModel) {
     val scroll = rememberScrollState()
     var keyInput by remember(viewModel.apiKey) { mutableStateOf(viewModel.apiKey) }
+    var groqInput by remember(viewModel.groqApiKey) { mutableStateOf(viewModel.groqApiKey) }
+    var azureInput by remember(viewModel.azureApiKey) { mutableStateOf(viewModel.azureApiKey) }
+    var regionInput by remember(viewModel.azureRegion) { mutableStateOf(viewModel.azureRegion) }
 
     Column(
         modifier = Modifier
@@ -106,6 +109,60 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 "• لو الاستخدام زاد عن الحد المجاني، الخدمة بتوقف مؤقتًا ومش بتخصم فلوس من غير إذنك.",
             fontSize = 16.sp
         )
+
+        Spacer(Modifier.height(24.dp))
+        Text("مفاتيح احتياطية (للتبديل التلقائي)", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "لو خلص ليمت Gemini، التطبيق ينقل لوحده على البديل من غير ما تعمل حاجة — بس لازم تحط مفاتيحهم هنا الأول. المفاتيح محفوظة مشفّرة على موبايلك بس.",
+            fontSize = 16.sp
+        )
+        Spacer(Modifier.height(12.dp))
+        Text("مفتاح Groq (للتفريغ)", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = groqInput,
+            onValueChange = { groqInput = it },
+            label = { Text("الصق مفتاح Groq هنا") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = { viewModel.saveGroqApiKey(groqInput) },
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("حفظ مفتاح Groq", fontSize = 16.sp) }
+        Spacer(Modifier.height(8.dp))
+        Text("مجاني ومن غير كارت — من console.groq.com/keys", fontSize = 14.sp)
+        Spacer(Modifier.height(20.dp))
+        Text("مفتاح Azure (للصوت)", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = azureInput,
+            onValueChange = { azureInput = it },
+            label = { Text("الصق مفتاح Azure هنا") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = regionInput,
+            onValueChange = { regionInput = it },
+            label = { Text("منطقة Azure (مثال: westeurope)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = { viewModel.saveAzureApiKey(azureInput); viewModel.saveAzureRegion(regionInput) },
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("حفظ مفتاح Azure", fontSize = 16.sp) }
+        Spacer(Modifier.height(8.dp))
+        Text("فيه صوت مصري — من Azure، وممكن يطلب كارت.", fontSize = 14.sp)
 
         Spacer(Modifier.height(24.dp))
         Text("الخصوصية", fontSize = 18.sp, fontWeight = FontWeight.Bold)
