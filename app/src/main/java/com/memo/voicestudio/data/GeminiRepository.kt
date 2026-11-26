@@ -29,7 +29,7 @@ class ServiceOverloadedException : RateLimitException()
  * كل التعامل مع Gemini API هنا:
  * - التفريغ: gemini-3.5-transcribe (باقة مجانية: حتى ساعة في الطلب، ~25 طلب/يوم)
  * - الصوت: gemini-2.5-flash-preview-tts (باقة مجانية، عربي مصري وفصحى)
- * - قراءة الصور وPDF المصوّر: gemini-2.5-flash
+ * - قراءة الصور وPDF المصوّر: gemini-3.8-flash
  *
  * الأصوات (أسماء رسمية موثّقة من Google، 30 صوتًا جاهزًا):
  * Google لا تصنّف الأصوات رسميًا لرجل/امرأة، فالتقسيم هنا حسب الوصف
@@ -57,8 +57,8 @@ class GeminiRepository(private val context: Context) {
     companion object {
         const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe"
         const val TTS_MODEL = "gemini-2.5-flash-preview-tts"
-        const val VISION_MODEL = "gemini-2.5-flash"
-        const val TEXT_MODEL = "gemini-2.5-flash"
+        const val VISION_MODEL = "gemini-3.8-flash"
+        const val TEXT_MODEL = "gemini-3.8-flash"
         const val PODCAST_HOST_VOICE = "Zephyr"
         const val PODCAST_GUEST_VOICE = "Charon"
         const val GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
