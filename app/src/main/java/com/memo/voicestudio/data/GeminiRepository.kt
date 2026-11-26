@@ -26,13 +26,18 @@ open class RateLimitException : Exception()
 /** الخدمة مشغولة مؤقتًا (ضغط عالي) — تُعامل مثل تجاوز الحد: إعادة محاولة أو التبديل للبديل. */
 class ServiceOverloadedException : RateLimitException()
 
+/** رصيد المزوّد المجاني خلص — يُعامل مثل تجاوز الحد: التبديل للبديل. */
+class CreditExhaustedException(message: String) : Exception(message)
+
 /**
  * كل التعامل مع Gemini API هنا:
  * - التفريغ: gemini-3.5-transcribe (باقة مجانية: حتى ساعة في الطلب، ~25 طلب/يوم)
  * - الصوت: gemini-2.5-flash-preview-tts (باقة مجانية، عربي مصري وفصحى)
  * - قراءة الصور وPDF المصوّر: gemini-3.8-flash
- * - بدائل احتياطية عند انتهاء الحد أو الضغط: التفريغ Groq ثم Deepgram،
+ * - بدائل احتياطية عند انتهاء الحد أو الضغط أو الرصيد: التفريغ Groq ثم Deepgram،
  *   والصوت Azure ثم ElevenLabs ثم Cartesia (كل واحد بمفتاح مجاني من الإعدادات).
+ * - المستخدم يقدر يختار مزوّد معيّن من الإعدادات — يتجرب الأول، ولو فشل
+ *   السلسلة تكمّل مع باقي المزودين بنفس الترتيب الافتراضي.
  *
  * الأصوات (أسماء رسمية موثّقة من Google، 30 صوتًا جاهزًا):
  * Google لا تصنّف الأصوات رسميًا لرجل/امرأة، فالتقسيم هنا حسب الوصف
@@ -88,6 +93,18 @@ class GeminiRepository(private val context: Context) {
 
         /** أقصى طول لنص طلب الصوت الواحد */
         const val MAX_TTS_CHARS = 2500
+
+        /** اسم المزوّد للعرض في الواجهة ورسائل الحالة. */
+        fun providerDisplayName(provider: String): String = when (provider) {
+            "auto" -> "تلقائي"
+            "gemini" -> "Gemini"
+            "groq" -> "Groq"
+            "deepgram" -> "Deepgram"
+            "azure" -> "Azure"
+            "elevenlabs" -> "ElevenLabs"
+            "cartesia" -> "Cartesia"
+            else -> provider
+        }
 
         /** كل الأصوات الرسمية الـ 30 مع وصفها الموثّق */
         val ALL_VOICES: List<Pair<String, String>> = listOf(
@@ -207,10 +224,25 @@ class GeminiRepository(private val context: Context) {
         onStatus: (String) -> Unit,
         groqApiKey: String = "",
         deepgramApiKey: String = "",
+        // المزود المختار يدويًا من الإعدادات ("auto" أو اسم مزود) — يتجرب الأول.
+        transcriptionProvider: String = "auto",
         // تقدّم التفريغ: الجزء الحالي (يبدأ من 1) من إجمالي الأجزاء — للسيرفس والإشعار.
-        onProgress: ((currentSegment: Int, totalSegments: Int) -> Unit)? = null
+        onProgress: ((currentSegment: Int, totalSegments: Int) -> Unit)? = null,
+        // المزوّد اللي شغال دلوقتي (Gemini/Groq/Deepgram) — للعرض في الواجهة.
+        onProvider: ((String) -> Unit)? = null
     ): Result<String> {
-        if (apiKey.isBlank()) {
+        val sttOrder = orderedProviders(
+            transcriptionProvider,
+            listOf("gemini", "groq", "deepgram")
+        ) { provider ->
+            when (provider) {
+                "gemini" -> apiKey.isNotBlank()
+                "groq" -> groqApiKey.isNotBlank()
+                "deepgram" -> deepgramApiKey.isNotBlank()
+                else -> false
+            }
+        }
+        if (sttOrder.isEmpty()) {
             return Result.failure(IllegalStateException("لا يوجد مفتاح — أدخل مفتاح Gemini من الإعدادات أولاً."))
         }
         return try {
@@ -239,24 +271,16 @@ class GeminiRepository(private val context: Context) {
             val out = StringBuilder()
             for ((i, seg) in segments.withIndex()) {
                 onProgress?.invoke(i + 1, segments.size)
-                onStatus("بنرفع الجزء ${i + 1} من ${segments.size}…")
-                val fileName = uploadFile(seg, audioMime, apiKey)
-                onStatus("بنستنى تجهيز الجزء ${i + 1}…")
-                waitForFileActive(fileName, apiKey)
-                onStatus("بنفرّغ الجزء ${i + 1} من ${segments.size}…")
-                val hasSttFallback = groqApiKey.isNotBlank() || deepgramApiKey.isNotBlank()
-                val text = if (!hasSttFallback) {
-                    transcribeFileWithRetry(fileName, audioMime, apiKey)
-                } else {
-                    try {
-                        transcribeFile(fileName, audioMime, apiKey)
-                    } catch (e: RateLimitException) {
-                        transcribeWithSttFallbacks(seg, audioMime, groqApiKey, deepgramApiKey, onStatus, e)
-                    }
-                }
+                val text = transcribeSegmentWithChain(
+                    seg, audioMime, i + 1, segments.size,
+                    apiKey, groqApiKey, deepgramApiKey,
+                    sttOrder, onStatus, onProvider
+                )
                 out.append(text).append("\n")
             }
             Result.success(out.toString().trim())
+        } catch (e: CreditExhaustedException) {
+            Result.failure(IllegalStateException(e.message ?: "رصيد الخدمة خلص."))
         } catch (e: RateLimitException) {
             val msg = if (e is ServiceOverloadedException) {
                 "Gemini مشغول دلوقتي من كتر الطلب — استنى شوية وجرّب تاني."
@@ -271,6 +295,59 @@ class GeminiRepository(private val context: Context) {
                 IllegalStateException("حصلت مشكلة أثناء التفريغ: ${e.message ?: "خطأ غير معروف"}")
             )
         }
+    }
+
+    /** تفريغ جزء واحد بسلسلة المزودين بالترتيب: المختار أولاً، وبعده الباقي. */
+    private suspend fun transcribeSegmentWithChain(
+        seg: File,
+        audioMime: String,
+        segmentIndex: Int,
+        totalSegments: Int,
+        apiKey: String,
+        groqApiKey: String,
+        deepgramApiKey: String,
+        order: List<String>,
+        onStatus: (String) -> Unit,
+        onProvider: ((String) -> Unit)? = null
+    ): String {
+        var lastFailure: Exception? = null
+        var fromName = ""
+        for (provider in order) {
+            try {
+                if (lastFailure != null) {
+                    onStatus(fallbackStatus(lastFailure, fromName, providerDisplayName(provider)))
+                }
+                onProvider?.invoke(provider)
+                return when (provider) {
+                    "gemini" -> {
+                        onStatus("بنرفع الجزء $segmentIndex من $totalSegments…")
+                        val fileName = uploadFile(seg, audioMime, apiKey)
+                        onStatus("بنستنى تجهيز الجزء $segmentIndex…")
+                        waitForFileActive(fileName, apiKey)
+                        onStatus("بنفرّغ الجزء $segmentIndex من $totalSegments…")
+                        // لو Gemini هو المزود الوحيد المتاح، نعيد المحاولة مرة بعد 65 ثانية (السلوك الحالي).
+                        if (order.size == 1) transcribeFileWithRetry(fileName, audioMime, apiKey)
+                        else transcribeFile(fileName, audioMime, apiKey)
+                    }
+                    "groq" -> {
+                        if (lastFailure == null) onStatus("بنفرّغ الجزء $segmentIndex من $totalSegments مع Groq…")
+                        transcribeWithGroq(seg, audioMime, groqApiKey)
+                    }
+                    "deepgram" -> {
+                        if (lastFailure == null) onStatus("بنفرّغ الجزء $segmentIndex من $totalSegments مع Deepgram…")
+                        transcribeWithDeepgram(seg, audioMime, deepgramApiKey)
+                    }
+                    else -> continue
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (!isFallbackFailure(e)) throw e
+                lastFailure = e
+                fromName = providerDisplayName(provider)
+            }
+        }
+        throw lastFailure ?: IllegalStateException("مفيش مزود تفريغ متاح.")
     }
 
     private suspend fun transcribeFileWithRetry(
@@ -382,37 +459,59 @@ class GeminiRepository(private val context: Context) {
         azureRegion: String = "westeurope",
         elevenLabsApiKey: String = "",
         cartesiaApiKey: String = "",
-        gender: String = "female"
+        gender: String = "female",
+        // المزود المختار يدويًا من الإعدادات ("auto" أو اسم مزود) — يتجرب الأول.
+        voiceProvider: String = "auto",
+        // المزوّد اللي شغال دلوقتي — للعرض في الواجهة.
+        onProvider: ((String) -> Unit)? = null
     ): Result<File> {
-        if (apiKey.isBlank()) {
+        val voiceOrder = orderedProviders(
+            voiceProvider,
+            listOf("gemini", "azure", "elevenlabs", "cartesia")
+        ) { provider ->
+            when (provider) {
+                "gemini" -> apiKey.isNotBlank()
+                "azure" -> azureApiKey.isNotBlank()
+                "elevenlabs" -> elevenLabsApiKey.isNotBlank()
+                "cartesia" -> cartesiaApiKey.isNotBlank()
+                else -> false
+            }
+        }
+        if (voiceOrder.isEmpty()) {
             return Result.failure(IllegalStateException("لا يوجد مفتاح — أدخل مفتاح Gemini من الإعدادات أولاً."))
         }
         if (text.isBlank()) {
             return Result.failure(IllegalStateException("مفيش نص — اكتب نص أو استخرجه من ملف أو صورة أولاً."))
         }
         if (style == "podcast") {
-            return generatePodcast(text, languageCode, apiKey, onStatus, azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey)
+            if (apiKey.isBlank()) {
+                return Result.failure(
+                    IllegalStateException("البودكاست محتاج مفتاح Gemini عشان يحوّل النص لحوار الأول.")
+                )
+            }
+            return generatePodcast(
+                text, languageCode, apiKey, onStatus,
+                azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey,
+                voiceOrder, onProvider
+            )
         }
         return try {
             val chunks = splitTextForTts(text, style)
-            val hasVoiceFallback = azureApiKey.isNotBlank() || elevenLabsApiKey.isNotBlank() || cartesiaApiKey.isNotBlank()
             val pcm = ByteArrayOutputStream()
             for ((i, chunk) in chunks.withIndex()) {
                 onStatus("بنولّد الصوت… جزء ${i + 1} من ${chunks.size}")
-                val bytes = if (!hasVoiceFallback) {
-                    speakChunkWithRetry(chunk, voiceName, languageCode, style, apiKey)
-                } else {
-                    try {
-                        speakChunk(chunk, voiceName, languageCode, style, apiKey)
-                    } catch (e: RateLimitException) {
-                        speakChunkWithFallbacks(chunk, azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey, gender, onStatus, e)
-                    }
-                }
+                val bytes = speakChunkWithChain(
+                    chunk, voiceName, languageCode, style,
+                    apiKey, azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey, gender,
+                    voiceOrder, onStatus, onProvider
+                )
                 pcm.write(bytes)
             }
             val wav = File(context.cacheDir, "voice_${System.currentTimeMillis()}.wav")
             wav.writeBytes(AudioUtils.pcmToWav(pcm.toByteArray(), 24000))
             Result.success(wav)
+        } catch (e: CreditExhaustedException) {
+            Result.failure(IllegalStateException(e.message ?: "رصيد الخدمة خلص."))
         } catch (e: RateLimitException) {
             val msg = if (e is ServiceOverloadedException) {
                 "Gemini مشغول دلوقتي من كتر الطلب — استنى شوية وجرّب تاني."
@@ -427,6 +526,56 @@ class GeminiRepository(private val context: Context) {
         }
     }
 
+    /** توليد صوت لجزء واحد بسلسلة المزودين بالترتيب: المختار أولاً، وبعده الباقي. */
+    private suspend fun speakChunkWithChain(
+        chunk: String,
+        voiceName: String,
+        languageCode: String,
+        style: String,
+        apiKey: String,
+        azureApiKey: String,
+        azureRegion: String,
+        elevenLabsApiKey: String,
+        cartesiaApiKey: String,
+        gender: String,
+        order: List<String>,
+        onStatus: (String) -> Unit,
+        onProvider: ((String) -> Unit)? = null
+    ): ByteArray {
+        var lastFailure: Exception? = null
+        var fromName = ""
+        for (provider in order) {
+            try {
+                if (lastFailure != null) {
+                    onStatus(fallbackStatus(lastFailure, fromName, providerDisplayName(provider)))
+                }
+                onProvider?.invoke(provider)
+                return when (provider) {
+                    "gemini" -> {
+                        // لو Gemini هو المزود الوحيد المتاح، نعيد المحاولة مرة بعد 65 ثانية (السلوك الحالي).
+                        if (order.size == 1) speakChunkWithRetry(chunk, voiceName, languageCode, style, apiKey)
+                        else speakChunk(chunk, voiceName, languageCode, style, apiKey)
+                    }
+                    "azure" -> {
+                        val azureVoice = if (gender == "male") AZURE_EG_MALE_VOICE else AZURE_EG_FEMALE_VOICE
+                        speakChunkWithAzure(chunk, azureVoice, azureApiKey, azureRegion)
+                    }
+                    "elevenlabs" -> {
+                        val voiceId = if (gender == "male") ELEVENLABS_MALE_VOICE else ELEVENLABS_FEMALE_VOICE
+                        speakChunkWithElevenLabs(chunk, voiceId, elevenLabsApiKey)
+                    }
+                    "cartesia" -> speakChunkWithCartesia(chunk, cartesiaApiKey)
+                    else -> continue
+                }
+            } catch (e: Exception) {
+                if (!isFallbackFailure(e)) throw e
+                lastFailure = e
+                fromName = providerDisplayName(provider)
+            }
+        }
+        throw lastFailure ?: IllegalStateException("مفيش مزود صوت متاح.")
+    }
+
     // ---------------- وضع البودكاست (حوار بين صوتين) ----------------
 
     private suspend fun generatePodcast(
@@ -437,7 +586,9 @@ class GeminiRepository(private val context: Context) {
         azureApiKey: String = "",
         azureRegion: String = "westeurope",
         elevenLabsApiKey: String = "",
-        cartesiaApiKey: String = ""
+        cartesiaApiKey: String = "",
+        voiceOrder: List<String>,
+        onProvider: ((String) -> Unit)? = null
     ): Result<File> {
         return try {
             onStatus("بنحوّل النص لحوار بودكاست…")
@@ -452,24 +603,21 @@ class GeminiRepository(private val context: Context) {
             if (chunks.isEmpty()) {
                 throw IllegalStateException("مقدرناش نحوّل النص لحوار — جرّب نص أقصر أو أوضح.")
             }
-            val hasVoiceFallback = azureApiKey.isNotBlank() || elevenLabsApiKey.isNotBlank() || cartesiaApiKey.isNotBlank()
             val pcm = ByteArrayOutputStream()
             for ((i, chunk) in chunks.withIndex()) {
                 onStatus("بنولّد صوت البودكاست… جزء ${i + 1} من ${chunks.size}")
-                val bytes = if (!hasVoiceFallback) {
-                    speakPodcastChunkWithRetry(chunk, languageCode, apiKey)
-                } else {
-                    try {
-                        speakPodcastChunk(chunk, languageCode, apiKey)
-                    } catch (e: RateLimitException) {
-                        speakPodcastChunkWithFallbacks(chunk, azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey, onStatus, e)
-                    }
-                }
+                val bytes = speakPodcastChunkWithChain(
+                    chunk, languageCode, apiKey,
+                    azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey,
+                    voiceOrder, onStatus, onProvider
+                )
                 pcm.write(bytes)
             }
             val wav = File(context.cacheDir, "podcast_${System.currentTimeMillis()}.wav")
             wav.writeBytes(AudioUtils.pcmToWav(pcm.toByteArray(), 24000))
             Result.success(wav)
+        } catch (e: CreditExhaustedException) {
+            Result.failure(IllegalStateException(e.message ?: "رصيد الخدمة خلص."))
         } catch (e: RateLimitException) {
             val msg = if (e is ServiceOverloadedException) {
                 "Gemini مشغول دلوقتي من كتر الطلب — استنى شوية وجرّب تاني."
@@ -482,6 +630,47 @@ class GeminiRepository(private val context: Context) {
                 IllegalStateException("حصلت مشكلة أثناء توليد البودكاست: ${e.message ?: "خطأ غير معروف"}")
             )
         }
+    }
+
+    /** توليد صوت بودكاست لجزء واحد بسلسلة المزودين بالترتيب: المختار أولاً، وبعده الباقي. */
+    private suspend fun speakPodcastChunkWithChain(
+        chunk: String,
+        languageCode: String,
+        apiKey: String,
+        azureApiKey: String,
+        azureRegion: String,
+        elevenLabsApiKey: String,
+        cartesiaApiKey: String,
+        order: List<String>,
+        onStatus: (String) -> Unit,
+        onProvider: ((String) -> Unit)? = null
+    ): ByteArray {
+        var lastFailure: Exception? = null
+        var fromName = ""
+        for (provider in order) {
+            try {
+                if (lastFailure != null) {
+                    onStatus(fallbackStatus(lastFailure, fromName, providerDisplayName(provider)))
+                }
+                onProvider?.invoke(provider)
+                return when (provider) {
+                    "gemini" -> {
+                        // لو Gemini هو المزود الوحيد المتاح، نعيد المحاولة مرة بعد 65 ثانية (السلوك الحالي).
+                        if (order.size == 1) speakPodcastChunkWithRetry(chunk, languageCode, apiKey)
+                        else speakPodcastChunk(chunk, languageCode, apiKey)
+                    }
+                    "azure" -> speakPodcastChunkWithAzure(chunk, azureApiKey, azureRegion)
+                    "elevenlabs" -> speakPodcastChunkWithElevenLabs(chunk, elevenLabsApiKey)
+                    "cartesia" -> speakPodcastChunkWithCartesia(chunk, cartesiaApiKey)
+                    else -> continue
+                }
+            } catch (e: Exception) {
+                if (!isFallbackFailure(e)) throw e
+                lastFailure = e
+                fromName = providerDisplayName(provider)
+            }
+        }
+        throw lastFailure ?: IllegalStateException("مفيش مزود صوت متاح.")
     }
 
     private suspend fun generatePodcastScript(text: String, languageCode: String, apiKey: String): String {
@@ -607,29 +796,6 @@ class GeminiRepository(private val context: Context) {
         }
     }
 
-    /** سلسلة التفريغ الاحتياطية: Groq ثم Deepgram (كل واحد مرة واحدة لكل جزء). */
-    private suspend fun transcribeWithSttFallbacks(
-        file: File,
-        mimeType: String,
-        groqKey: String,
-        deepgramKey: String,
-        onStatus: (String) -> Unit,
-        cause: RateLimitException
-    ): String {
-        if (groqKey.isNotBlank()) {
-            try {
-                onStatus(fallbackStatus(cause, "Gemini", "Groq"))
-                return transcribeWithGroq(file, mimeType, groqKey)
-            } catch (e: RateLimitException) {
-                if (deepgramKey.isBlank()) throw e
-                onStatus(fallbackStatus(e, "Groq", "Deepgram"))
-                return transcribeWithDeepgram(file, mimeType, deepgramKey)
-            }
-        }
-        onStatus(fallbackStatus(cause, "Gemini", "Deepgram"))
-        return transcribeWithDeepgram(file, mimeType, deepgramKey)
-    }
-
     private suspend fun transcribeWithDeepgram(file: File, mimeType: String, deepgramKey: String): String {
         val request = Request.Builder()
             .url(DEEPGRAM_STT_URL)
@@ -644,7 +810,7 @@ class GeminiRepository(private val context: Context) {
                     throw IllegalStateException("مفتاح Deepgram مش شغال — اتأكد من نسخه صح من الإعدادات.")
                 }
                 if (resp.code == 402) {
-                    throw IllegalStateException("رصيد Deepgram خلص — الرصيد المجاني ٢٠٠ دولار مرة واحدة.")
+                    throw CreditExhaustedException("رصيد Deepgram خلص — الرصيد المجاني ٢٠٠ دولار مرة واحدة.")
                 }
                 if (!resp.isSuccessful) {
                     throw IllegalStateException("خطأ من Deepgram (${resp.code})")
@@ -657,10 +823,33 @@ class GeminiRepository(private val context: Context) {
         }
     }
 
+    /** فشل يستاهل التبديل للمزوّد اللي بعده: تجاوز حد أو ضغط أو انتهاء رصيد. */
+    private fun isFallbackFailure(e: Exception): Boolean =
+        e is RateLimitException || e is CreditExhaustedException
+
+    /** ترتيب المزودين: المختار يدويًا أولاً، وبعده باقي المزودين المتاحين بالترتيب الافتراضي. */
+    private fun orderedProviders(
+        preferred: String,
+        defaultOrder: List<String>,
+        isAvailable: (String) -> Boolean
+    ): List<String> {
+        val ordered = mutableListOf<String>()
+        if (preferred != "auto" && preferred in defaultOrder && isAvailable(preferred)) {
+            ordered.add(preferred)
+        }
+        for (p in defaultOrder) {
+            if (p !in ordered && isAvailable(p)) ordered.add(p)
+        }
+        return ordered
+    }
+
     /** رسالة حالة عند الانتقال من مزوّد لمزوّد بديل. */
-    private fun fallbackStatus(cause: RateLimitException, fromName: String, toName: String): String =
-        if (cause is ServiceOverloadedException) "$fromName مشغول دلوقتي — بنكمّل مع $toName…"
-        else "ليمت $fromName خلص — بنكمّل مع $toName…"
+    private fun fallbackStatus(cause: Exception, fromName: String, toName: String): String =
+        when (cause) {
+            is ServiceOverloadedException -> "$fromName مشغول دلوقتي — بنكمّل مع $toName…"
+            is CreditExhaustedException -> "رصيد $fromName خلص — بنكمّل مع $toName…"
+            else -> "ليمت $fromName خلص — بنكمّل مع $toName…"
+        }
 
     private suspend fun speakChunkWithAzure(
         chunk: String,
@@ -709,83 +898,6 @@ class GeminiRepository(private val context: Context) {
         return out.toByteArray()
     }
 
-    /** سلسلة الصوت الاحتياطية (صوت واحد): Azure ثم ElevenLabs ثم Cartesia. */
-    private suspend fun speakChunkWithFallbacks(
-        chunk: String,
-        azureApiKey: String,
-        azureRegion: String,
-        elevenLabsApiKey: String,
-        cartesiaApiKey: String,
-        gender: String,
-        onStatus: (String) -> Unit,
-        cause: RateLimitException
-    ): ByteArray {
-        var lastError: RateLimitException = cause
-        var fromName = "Gemini للصوت"
-        if (azureApiKey.isNotBlank()) {
-            try {
-                onStatus(fallbackStatus(cause, fromName, "Azure"))
-                val azureVoice = if (gender == "male") AZURE_EG_MALE_VOICE else AZURE_EG_FEMALE_VOICE
-                return speakChunkWithAzure(chunk, azureVoice, azureApiKey, azureRegion)
-            } catch (e: RateLimitException) {
-                lastError = e
-                fromName = "Azure"
-            }
-        }
-        if (elevenLabsApiKey.isNotBlank()) {
-            try {
-                onStatus(fallbackStatus(lastError, fromName, "ElevenLabs"))
-                val voiceId = if (gender == "male") ELEVENLABS_MALE_VOICE else ELEVENLABS_FEMALE_VOICE
-                return speakChunkWithElevenLabs(chunk, voiceId, elevenLabsApiKey)
-            } catch (e: RateLimitException) {
-                lastError = e
-                fromName = "ElevenLabs"
-            }
-        }
-        if (cartesiaApiKey.isNotBlank()) {
-            onStatus(fallbackStatus(lastError, fromName, "Cartesia"))
-            return speakChunkWithCartesia(chunk, cartesiaApiKey)
-        }
-        throw lastError
-    }
-
-    /** سلسلة الصوت الاحتياطية للبودكاست (كل سطر حوار لوحده): Azure ثم ElevenLabs ثم Cartesia. */
-    private suspend fun speakPodcastChunkWithFallbacks(
-        chunk: String,
-        azureApiKey: String,
-        azureRegion: String,
-        elevenLabsApiKey: String,
-        cartesiaApiKey: String,
-        onStatus: (String) -> Unit,
-        cause: RateLimitException
-    ): ByteArray {
-        var lastError: RateLimitException = cause
-        var fromName = "Gemini للصوت"
-        if (azureApiKey.isNotBlank()) {
-            try {
-                onStatus(fallbackStatus(cause, fromName, "Azure"))
-                return speakPodcastChunkWithAzure(chunk, azureApiKey, azureRegion)
-            } catch (e: RateLimitException) {
-                lastError = e
-                fromName = "Azure"
-            }
-        }
-        if (elevenLabsApiKey.isNotBlank()) {
-            try {
-                onStatus(fallbackStatus(lastError, fromName, "ElevenLabs"))
-                return speakPodcastChunkWithElevenLabs(chunk, elevenLabsApiKey)
-            } catch (e: RateLimitException) {
-                lastError = e
-                fromName = "ElevenLabs"
-            }
-        }
-        if (cartesiaApiKey.isNotBlank()) {
-            onStatus(fallbackStatus(lastError, fromName, "Cartesia"))
-            return speakPodcastChunkWithCartesia(chunk, cartesiaApiKey)
-        }
-        throw lastError
-    }
-
     private suspend fun speakChunkWithElevenLabs(
         chunk: String,
         voiceId: String,
@@ -811,7 +923,7 @@ class GeminiRepository(private val context: Context) {
                     throw IllegalStateException("مفتاح ElevenLabs مش شغال — اتأكد من نسخه صح من الإعدادات.")
                 }
                 if (resp.code == 402) {
-                    throw IllegalStateException("رصيد ElevenLabs المجاني خلص — بييجي ١٠ آلاف نقطة جديدة كل شهر.")
+                    throw CreditExhaustedException("رصيد ElevenLabs المجاني خلص — بييجي ١٠ آلاف نقطة جديدة كل شهر.")
                 }
                 if (!resp.isSuccessful) {
                     throw IllegalStateException("خطأ من ElevenLabs (${resp.code})")
@@ -867,7 +979,7 @@ class GeminiRepository(private val context: Context) {
                     throw IllegalStateException("مفتاح Cartesia مش شغال — اتأكد من نسخه صح من الإعدادات.")
                 }
                 if (resp.code == 402) {
-                    throw IllegalStateException("رصيد Cartesia المجاني خلص — بييجي ٢٠ ألف نقطة جديدة كل شهر.")
+                    throw CreditExhaustedException("رصيد Cartesia المجاني خلص — بييجي ٢٠ ألف نقطة جديدة كل شهر.")
                 }
                 if (!resp.isSuccessful) {
                     throw IllegalStateException("خطأ من Cartesia (${resp.code})")

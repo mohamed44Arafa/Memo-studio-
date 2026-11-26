@@ -254,6 +254,11 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
             "الصوت اللي هيتستخدم: ${viewModel.voiceLabel()}",
             fontSize = 15.sp
         )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "المزود: ${viewModel.voiceProviderLabel()}",
+            fontSize = 15.sp
+        )
 
         Spacer(Modifier.height(20.dp))
         Button(

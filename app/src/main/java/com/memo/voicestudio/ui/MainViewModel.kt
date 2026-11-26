@@ -53,6 +53,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var cartesiaApiKey by mutableStateOf(settings.cartesiaApiKey)
         private set
+    var transcriptionProvider by mutableStateOf(settings.transcriptionProvider)
+        private set
+    var voiceProvider by mutableStateOf(settings.voiceProvider)
+        private set
+    /** المزوّد اللي شغال فعليًا دلوقتي في التفريغ/الصوت (من الـ repo) — للعرض في الشاشة. */
+    var activeTransProvider by mutableStateOf("")
+        private set
+    var activeVoiceProvider by mutableStateOf("")
+        private set
     var keyTest by mutableStateOf<String?>(null)
         private set
     var isTestingKey by mutableStateOf(false)
@@ -112,6 +121,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         cartesiaApiKey = value
         settings.cartesiaApiKey = value
     }
+
+    fun saveTranscriptionProvider(value: String) {
+        transcriptionProvider = value
+        settings.transcriptionProvider = value
+    }
+
+    fun saveVoiceProvider(value: String) {
+        voiceProvider = value
+        settings.voiceProvider = value
+    }
+
+    /** المزود الفعّال للتفريغ: لو المختار مفتاحه اتمسح، يرجع تلقائي. */
+    fun effectiveTranscriptionProvider(): String = when (transcriptionProvider) {
+        "gemini" -> if (apiKey.isNotBlank()) "gemini" else "auto"
+        "groq" -> if (groqApiKey.isNotBlank()) "groq" else "auto"
+        "deepgram" -> if (deepgramApiKey.isNotBlank()) "deepgram" else "auto"
+        else -> "auto"
+    }
+
+    /** المزود الفعّال للصوت: لو المختار مفتاحه اتمسح، يرجع تلقائي. */
+    fun effectiveVoiceProvider(): String = when (voiceProvider) {
+        "gemini" -> if (apiKey.isNotBlank()) "gemini" else "auto"
+        "azure" -> if (azureApiKey.isNotBlank()) "azure" else "auto"
+        "elevenlabs" -> if (elevenLabsApiKey.isNotBlank()) "elevenlabs" else "auto"
+        "cartesia" -> if (cartesiaApiKey.isNotBlank()) "cartesia" else "auto"
+        else -> "auto"
+    }
+
+    /** اسم مزود التفريغ النشط للعرض (الفعلي لو شغال، وإلا المختار). */
+    fun transProviderLabel(): String =
+        GeminiRepository.providerDisplayName(activeTransProvider.ifBlank { effectiveTranscriptionProvider() })
+
+    /** اسم مزود الصوت النشط للعرض (الفعلي لو شغال، وإلا المختار). */
+    fun voiceProviderLabel(): String =
+        GeminiRepository.providerDisplayName(activeVoiceProvider.ifBlank { effectiveVoiceProvider() })
 
     fun saveGender(value: String) {
         gender = value
@@ -269,6 +313,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (state.status.isNotBlank()) transStatus = state.status
                 transSegmentCurrent = state.currentSegment
                 transSegmentTotal = state.totalSegments
+                if (state.provider.isNotBlank()) activeTransProvider = state.provider
                 if (state.result.isNotBlank()) {
                     transResult = state.result
                     sharedText = state.result
@@ -283,6 +328,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         transStatus = "بنبدأ…"
         transSegmentCurrent = 0
         transSegmentTotal = 0
+        activeTransProvider = ""
         isTranscribing = true
         // التفريغ بيشتغل في فورجراوند سيرفس عشان يكمّل في الخلفية.
         TranscriptionService.start(getApplication(), file, mimeType)
@@ -317,6 +363,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val text = speakText.trim()
         viewModelScope.launch(Dispatchers.IO) {
             isSpeaking = true
+            activeVoiceProvider = ""
             speakStatus = "بنجهّز الصوت…"
             audioFile = null
             val result = repo.synthesize(
@@ -326,7 +373,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 azureRegion = azureRegion.trim(),
                 elevenLabsApiKey = elevenLabsApiKey.trim(),
                 cartesiaApiKey = cartesiaApiKey.trim(),
-                gender = gender
+                gender = gender,
+                voiceProvider = voiceProvider,
+                onProvider = { p -> activeVoiceProvider = p }
             )
             withContext(Dispatchers.Main) {
                 isSpeaking = false

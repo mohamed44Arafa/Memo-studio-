@@ -35,7 +35,8 @@ data class TranscriptionState(
     val currentSegment: Int = 0,
     val totalSegments: Int = 0,
     val result: String = "",
-    val error: String? = null
+    val error: String? = null,
+    val provider: String = ""
 )
 
 /**
@@ -159,11 +160,16 @@ class TranscriptionService : Service() {
                 },
                 groqApiKey = settings.groqApiKey.trim(),
                 deepgramApiKey = settings.deepgramApiKey.trim(),
+                // الاختيار اليدوي من الإعدادات يتقرأ هنا، فبيوصل للسيرفس تلقائيًا.
+                transcriptionProvider = settings.transcriptionProvider,
                 onProgress = { current, total ->
                     currentSegment = current
                     totalSegments = total
                     TranscriptionStore.update { it.copy(currentSegment = current, totalSegments = total) }
                     updateNotification()
+                },
+                onProvider = { p ->
+                    TranscriptionStore.update { it.copy(provider = p) }
                 }
             )
             result

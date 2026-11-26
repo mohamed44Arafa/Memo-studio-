@@ -87,6 +87,8 @@ fun TranscribeScreen(viewModel: MainViewModel, onGoToSpeak: () -> Unit) {
             "اختار فيديو أو ملف صوتي، والتطبيق يحوّله لنص عربي دقيق باستخدام Gemini. الملف بيترفع على سيرفر Google للتفريغ بس.",
             fontSize = 16.sp
         )
+        Spacer(Modifier.height(8.dp))
+        Text("المزود: ${viewModel.transProviderLabel()}", fontSize = 16.sp)
         Spacer(Modifier.height(20.dp))
 
         Button(

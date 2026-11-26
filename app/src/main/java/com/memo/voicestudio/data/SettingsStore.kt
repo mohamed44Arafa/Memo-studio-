@@ -71,4 +71,14 @@ class SettingsStore(context: Context) {
     var voiceName: String
         get() = prefs.getString("voice_name", "") ?: ""
         set(value) = prefs.edit().putString("voice_name", value).apply()
+
+    /** مزود التفريغ المختار يدويًا: "auto" أو "gemini" أو "groq" أو "deepgram" */
+    var transcriptionProvider: String
+        get() = prefs.getString("transcription_provider", "auto") ?: "auto"
+        set(value) = prefs.edit().putString("transcription_provider", value).apply()
+
+    /** مزود الصوت المختار يدويًا: "auto" أو "gemini" أو "azure" أو "elevenlabs" أو "cartesia" */
+    var voiceProvider: String
+        get() = prefs.getString("voice_provider", "auto") ?: "auto"
+        set(value) = prefs.edit().putString("voice_provider", value).apply()
 }

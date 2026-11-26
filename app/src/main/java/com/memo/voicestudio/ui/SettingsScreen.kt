@@ -1,6 +1,8 @@
 package com.memo.voicestudio.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,6 +13,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -303,6 +306,93 @@ fun SettingsScreen(viewModel: MainViewModel) {
         }
         Spacer(Modifier.height(8.dp))
         Text("من cartesia.ai ← Play ← API key — ٢٠ ألف نقطة كل شهر", fontSize = 14.sp)
+
+        Spacer(Modifier.height(24.dp))
+        Text("اختيار المزوّد يدويًا", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "لو اخترت مزوّد معيّن، التطبيق يبدأ بيه الأول، ولو وقع أو خلص يبدّل لوحده على باقي المزودين. المزودات اللي ملهاش مفتاح محفوظ مش بتظهر هنا.",
+            fontSize = 16.sp
+        )
+        Spacer(Modifier.height(12.dp))
+        Text("مزود التفريغ", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = viewModel.effectiveTranscriptionProvider() == "auto",
+                onClick = { viewModel.saveTranscriptionProvider("auto") },
+                label = { Text("تلقائي", fontSize = 16.sp) }
+            )
+            if (viewModel.apiKey.isNotBlank()) {
+                FilterChip(
+                    selected = viewModel.effectiveTranscriptionProvider() == "gemini",
+                    onClick = { viewModel.saveTranscriptionProvider("gemini") },
+                    label = { Text("Gemini", fontSize = 16.sp) }
+                )
+            }
+            if (viewModel.groqApiKey.isNotBlank()) {
+                FilterChip(
+                    selected = viewModel.effectiveTranscriptionProvider() == "groq",
+                    onClick = { viewModel.saveTranscriptionProvider("groq") },
+                    label = { Text("Groq", fontSize = 16.sp) }
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (viewModel.deepgramApiKey.isNotBlank()) {
+                FilterChip(
+                    selected = viewModel.effectiveTranscriptionProvider() == "deepgram",
+                    onClick = { viewModel.saveTranscriptionProvider("deepgram") },
+                    label = { Text("Deepgram", fontSize = 16.sp) }
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text("تلقائي = يجرب Gemini الأول ويبدل لوحده لو خلص أو وقع.", fontSize = 14.sp)
+        Spacer(Modifier.height(16.dp))
+        Text("مزود الصوت", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = viewModel.effectiveVoiceProvider() == "auto",
+                onClick = { viewModel.saveVoiceProvider("auto") },
+                label = { Text("تلقائي", fontSize = 16.sp) }
+            )
+            if (viewModel.apiKey.isNotBlank()) {
+                FilterChip(
+                    selected = viewModel.effectiveVoiceProvider() == "gemini",
+                    onClick = { viewModel.saveVoiceProvider("gemini") },
+                    label = { Text("Gemini", fontSize = 16.sp) }
+                )
+            }
+            if (viewModel.azureApiKey.isNotBlank()) {
+                FilterChip(
+                    selected = viewModel.effectiveVoiceProvider() == "azure",
+                    onClick = { viewModel.saveVoiceProvider("azure") },
+                    label = { Text("Azure", fontSize = 16.sp) }
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (viewModel.elevenLabsApiKey.isNotBlank()) {
+                FilterChip(
+                    selected = viewModel.effectiveVoiceProvider() == "elevenlabs",
+                    onClick = { viewModel.saveVoiceProvider("elevenlabs") },
+                    label = { Text("ElevenLabs", fontSize = 16.sp) }
+                )
+            }
+            if (viewModel.cartesiaApiKey.isNotBlank()) {
+                FilterChip(
+                    selected = viewModel.effectiveVoiceProvider() == "cartesia",
+                    onClick = { viewModel.saveVoiceProvider("cartesia") },
+                    label = { Text("Cartesia", fontSize = 16.sp) }
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text("تلقائي = يجرب Gemini الأول ويبدل لوحده لو خلص أو وقع.", fontSize = 14.sp)
 
         Spacer(Modifier.height(24.dp))
         Text("الخصوصية", fontSize = 18.sp, fontWeight = FontWeight.Bold)
