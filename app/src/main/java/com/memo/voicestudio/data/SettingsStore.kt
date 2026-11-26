@@ -52,6 +52,21 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("azure_region", "westeurope") ?: "westeurope"
         set(value) = prefs.edit().putString("azure_region", value).apply()
 
+    /** مفتاح Deepgram (احتياطي ثاني للتفريغ) */
+    var deepgramApiKey: String
+        get() = prefs.getString("deepgram_api_key", "") ?: ""
+        set(value) = prefs.edit().putString("deepgram_api_key", value).apply()
+
+    /** مفتاح ElevenLabs (احتياطي ثاني للصوت) */
+    var elevenLabsApiKey: String
+        get() = prefs.getString("elevenlabs_api_key", "") ?: ""
+        set(value) = prefs.edit().putString("elevenlabs_api_key", value).apply()
+
+    /** مفتاح Cartesia (احتياطي ثالث للصوت) */
+    var cartesiaApiKey: String
+        get() = prefs.getString("cartesia_api_key", "") ?: ""
+        set(value) = prefs.edit().putString("cartesia_api_key", value).apply()
+
     /** اسم صوت Gemini المختار (من قائمة الأصوات الرسمية) */
     var voiceName: String
         get() = prefs.getString("voice_name", "") ?: ""

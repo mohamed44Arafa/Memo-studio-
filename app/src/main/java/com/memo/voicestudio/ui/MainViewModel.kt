@@ -44,6 +44,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var azureRegion by mutableStateOf(settings.azureRegion)
         private set
+    var deepgramApiKey by mutableStateOf(settings.deepgramApiKey)
+        private set
+    var elevenLabsApiKey by mutableStateOf(settings.elevenLabsApiKey)
+        private set
+    var cartesiaApiKey by mutableStateOf(settings.cartesiaApiKey)
+        private set
     var keyTest by mutableStateOf<String?>(null)
         private set
     var isTestingKey by mutableStateOf(false)
@@ -67,6 +73,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveAzureRegion(value: String) {
         azureRegion = value
         settings.azureRegion = value
+    }
+
+    fun saveDeepgramApiKey(value: String) {
+        deepgramApiKey = value
+        settings.deepgramApiKey = value
+    }
+
+    fun saveElevenLabsApiKey(value: String) {
+        elevenLabsApiKey = value
+        settings.elevenLabsApiKey = value
+    }
+
+    fun saveCartesiaApiKey(value: String) {
+        cartesiaApiKey = value
+        settings.cartesiaApiKey = value
     }
 
     fun saveGender(value: String) {
@@ -144,7 +165,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val result = repo.transcribe(
                 file, mimeType, apiKey.trim(),
                 onStatus = { status -> transStatus = status },
-                groqApiKey = groqApiKey.trim()
+                groqApiKey = groqApiKey.trim(),
+                deepgramApiKey = deepgramApiKey.trim()
             )
             withContext(Dispatchers.Main) {
                 isTranscribing = false
@@ -197,6 +219,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 onStatus = { status -> speakStatus = status },
                 azureApiKey = azureApiKey.trim(),
                 azureRegion = azureRegion.trim(),
+                elevenLabsApiKey = elevenLabsApiKey.trim(),
+                cartesiaApiKey = cartesiaApiKey.trim(),
                 gender = gender
             )
             withContext(Dispatchers.Main) {

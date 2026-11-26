@@ -126,3 +126,21 @@ data class FileInfoResponse(
 data class GroqTranscriptionResponse(
     val text: String?
 )
+
+// ---------- رد Deepgram (تفريغ احتياطي ثاني) ----------
+
+data class DeepgramTranscriptionResponse(
+    val results: DeepgramResults?
+)
+
+data class DeepgramResults(
+    val channels: List<DeepgramChannel>?
+)
+
+data class DeepgramChannel(
+    val alternatives: List<DeepgramAlternative>?
+)
+
+data class DeepgramAlternative(
+    val transcript: String?
+)

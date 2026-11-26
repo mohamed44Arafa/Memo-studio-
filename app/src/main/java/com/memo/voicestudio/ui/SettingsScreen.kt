@@ -33,6 +33,9 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var groqInput by remember(viewModel.groqApiKey) { mutableStateOf(viewModel.groqApiKey) }
     var azureInput by remember(viewModel.azureApiKey) { mutableStateOf(viewModel.azureApiKey) }
     var regionInput by remember(viewModel.azureRegion) { mutableStateOf(viewModel.azureRegion) }
+    var deepgramInput by remember(viewModel.deepgramApiKey) { mutableStateOf(viewModel.deepgramApiKey) }
+    var elevenLabsInput by remember(viewModel.elevenLabsApiKey) { mutableStateOf(viewModel.elevenLabsApiKey) }
+    var cartesiaInput by remember(viewModel.cartesiaApiKey) { mutableStateOf(viewModel.cartesiaApiKey) }
 
     Column(
         modifier = Modifier
@@ -163,6 +166,63 @@ fun SettingsScreen(viewModel: MainViewModel) {
         ) { Text("حفظ مفتاح Azure", fontSize = 16.sp) }
         Spacer(Modifier.height(8.dp))
         Text("فيه صوت مصري — من Azure، وممكن يطلب كارت.", fontSize = 14.sp)
+        Spacer(Modifier.height(20.dp))
+        Text("مفتاح Deepgram (للتفريغ)", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = deepgramInput,
+            onValueChange = { deepgramInput = it },
+            label = { Text("الصق مفتاح Deepgram هنا") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = { viewModel.saveDeepgramApiKey(deepgramInput) },
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("حفظ مفتاح Deepgram", fontSize = 16.sp) }
+        Spacer(Modifier.height(8.dp))
+        Text("من deepgram.com ← Console ← API Keys — رصيد ٢٠٠ دولار مرة واحدة", fontSize = 14.sp)
+        Spacer(Modifier.height(20.dp))
+        Text("مفتاح ElevenLabs (للصوت)", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = elevenLabsInput,
+            onValueChange = { elevenLabsInput = it },
+            label = { Text("الصق مفتاح ElevenLabs هنا") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = { viewModel.saveElevenLabsApiKey(elevenLabsInput) },
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("حفظ مفتاح ElevenLabs", fontSize = 16.sp) }
+        Spacer(Modifier.height(8.dp))
+        Text("من elevenlabs.io — مفتاح API — ١٠ آلاف نقطة كل شهر", fontSize = 14.sp)
+        Spacer(Modifier.height(20.dp))
+        Text("مفتاح Cartesia (للصوت)", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = cartesiaInput,
+            onValueChange = { cartesiaInput = it },
+            label = { Text("الصق مفتاح Cartesia هنا") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = { viewModel.saveCartesiaApiKey(cartesiaInput) },
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("حفظ مفتاح Cartesia", fontSize = 16.sp) }
+        Spacer(Modifier.height(8.dp))
+        Text("من cartesia.ai ← Play ← API key — ٢٠ ألف نقطة كل شهر", fontSize = 14.sp)
 
         Spacer(Modifier.height(24.dp))
         Text("الخصوصية", fontSize = 18.sp, fontWeight = FontWeight.Bold)

@@ -30,6 +30,8 @@ class ServiceOverloadedException : RateLimitException()
  * - التفريغ: gemini-3.5-transcribe (باقة مجانية: حتى ساعة في الطلب، ~25 طلب/يوم)
  * - الصوت: gemini-2.5-flash-preview-tts (باقة مجانية، عربي مصري وفصحى)
  * - قراءة الصور وPDF المصوّر: gemini-3.8-flash
+ * - بدائل احتياطية عند انتهاء الحد أو الضغط: التفريغ Groq ثم Deepgram،
+ *   والصوت Azure ثم ElevenLabs ثم Cartesia (كل واحد بمفتاح مجاني من الإعدادات).
  *
  * الأصوات (أسماء رسمية موثّقة من Google، 30 صوتًا جاهزًا):
  * Google لا تصنّف الأصوات رسميًا لرجل/امرأة، فالتقسيم هنا حسب الوصف
@@ -66,6 +68,14 @@ class GeminiRepository(private val context: Context) {
         const val GROQ_MAX_FILE_BYTES = 25L * 1024L * 1024L
         const val AZURE_EG_FEMALE_VOICE = "ar-EG-SalmaNeural"
         const val AZURE_EG_MALE_VOICE = "ar-EG-ShakirNeural"
+        const val DEEPGRAM_STT_URL = "https://api.deepgram.com/v1/listen?model=nova-3&language=ar-EG&smart_format=true"
+        const val ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
+        const val ELEVENLABS_TTS_MODEL = "eleven_turbo_v2_5"
+        const val ELEVENLABS_MALE_VOICE = "pNInz6obpgDQGcFmaJgB"
+        const val ELEVENLABS_FEMALE_VOICE = "21m00Tcm4TlvDq8ikWAM"
+        const val CARTESIA_TTS_URL = "https://api.cartesia.ai/tts/bytes"
+        const val CARTESIA_TTS_MODEL = "sonic-3.6"
+        const val CARTESIA_VOICE = "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4"
 
         /** أقصى طول للجزء الواحد عند التفريغ (50 دقيقة — أقل من حد الساعة) */
         const val MAX_SEGMENT_MS = 50L * 60L * 1000L
@@ -129,7 +139,8 @@ class GeminiRepository(private val context: Context) {
         mimeType: String,
         apiKey: String,
         onStatus: (String) -> Unit,
-        groqApiKey: String = ""
+        groqApiKey: String = "",
+        deepgramApiKey: String = ""
     ): Result<String> {
         if (apiKey.isBlank()) {
             return Result.failure(IllegalStateException("لا يوجد مفتاح — أدخل مفتاح Gemini من الإعدادات أولاً."))
@@ -164,18 +175,14 @@ class GeminiRepository(private val context: Context) {
                 onStatus("بنستنى تجهيز الجزء ${i + 1}…")
                 waitForFileActive(fileName, apiKey)
                 onStatus("بنفرّغ الجزء ${i + 1} من ${segments.size}…")
-                val text = if (groqApiKey.isBlank()) {
+                val hasSttFallback = groqApiKey.isNotBlank() || deepgramApiKey.isNotBlank()
+                val text = if (!hasSttFallback) {
                     transcribeFileWithRetry(fileName, audioMime, apiKey)
                 } else {
                     try {
                         transcribeFile(fileName, audioMime, apiKey)
                     } catch (e: RateLimitException) {
-                        if (e is ServiceOverloadedException) {
-                            onStatus("Gemini مشغول دلوقتي — بنكمّل مع Groq…")
-                        } else {
-                            onStatus("ليمت Gemini خلص — بنكمّل مع Groq…")
-                        }
-                        transcribeWithGroq(seg, audioMime, groqApiKey)
+                        transcribeWithSttFallbacks(seg, audioMime, groqApiKey, deepgramApiKey, onStatus, e)
                     }
                 }
                 out.append(text).append("\n")
@@ -302,6 +309,8 @@ class GeminiRepository(private val context: Context) {
         onStatus: (String) -> Unit,
         azureApiKey: String = "",
         azureRegion: String = "westeurope",
+        elevenLabsApiKey: String = "",
+        cartesiaApiKey: String = "",
         gender: String = "female"
     ): Result<File> {
         if (apiKey.isBlank()) {
@@ -311,24 +320,22 @@ class GeminiRepository(private val context: Context) {
             return Result.failure(IllegalStateException("مفيش نص — اكتب نص أو استخرجه من ملف أو صورة أولاً."))
         }
         if (style == "podcast") {
-            return generatePodcast(text, languageCode, apiKey, onStatus, azureApiKey, azureRegion)
+            return generatePodcast(text, languageCode, apiKey, onStatus, azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey)
         }
         return try {
             val chunks = splitTextForTts(text, style)
-            val azureVoice = if (gender == "male") AZURE_EG_MALE_VOICE else AZURE_EG_FEMALE_VOICE
+            val hasVoiceFallback = azureApiKey.isNotBlank() || elevenLabsApiKey.isNotBlank() || cartesiaApiKey.isNotBlank()
             val pcm = ByteArrayOutputStream()
             for ((i, chunk) in chunks.withIndex()) {
                 onStatus("بنولّد الصوت… جزء ${i + 1} من ${chunks.size}")
-                val bytes = try {
+                val bytes = if (!hasVoiceFallback) {
                     speakChunkWithRetry(chunk, voiceName, languageCode, style, apiKey)
-                } catch (e: RateLimitException) {
-                    if (azureApiKey.isBlank()) throw e
-                    if (e is ServiceOverloadedException) {
-                        onStatus("Gemini للصوت مشغول دلوقتي — بنكمّل مع Azure…")
-                    } else {
-                        onStatus("ليمت Gemini للصوت خلص — بنكمّل مع Azure…")
+                } else {
+                    try {
+                        speakChunk(chunk, voiceName, languageCode, style, apiKey)
+                    } catch (e: RateLimitException) {
+                        speakChunkWithFallbacks(chunk, azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey, gender, onStatus, e)
                     }
-                    speakChunkWithAzure(chunk, azureVoice, azureApiKey, azureRegion)
                 }
                 pcm.write(bytes)
             }
@@ -357,7 +364,9 @@ class GeminiRepository(private val context: Context) {
         apiKey: String,
         onStatus: (String) -> Unit,
         azureApiKey: String = "",
-        azureRegion: String = "westeurope"
+        azureRegion: String = "westeurope",
+        elevenLabsApiKey: String = "",
+        cartesiaApiKey: String = ""
     ): Result<File> {
         return try {
             onStatus("بنحوّل النص لحوار بودكاست…")
@@ -366,19 +375,18 @@ class GeminiRepository(private val context: Context) {
             if (chunks.isEmpty()) {
                 throw IllegalStateException("مقدرناش نحوّل النص لحوار — جرّب نص أقصر أو أوضح.")
             }
+            val hasVoiceFallback = azureApiKey.isNotBlank() || elevenLabsApiKey.isNotBlank() || cartesiaApiKey.isNotBlank()
             val pcm = ByteArrayOutputStream()
             for ((i, chunk) in chunks.withIndex()) {
                 onStatus("بنولّد صوت البودكاست… جزء ${i + 1} من ${chunks.size}")
-                val bytes = try {
+                val bytes = if (!hasVoiceFallback) {
                     speakPodcastChunkWithRetry(chunk, languageCode, apiKey)
-                } catch (e: RateLimitException) {
-                    if (azureApiKey.isBlank()) throw e
-                    if (e is ServiceOverloadedException) {
-                        onStatus("Gemini للصوت مشغول دلوقتي — بنكمّل مع Azure…")
-                    } else {
-                        onStatus("ليمت Gemini للصوت خلص — بنكمّل مع Azure…")
+                } else {
+                    try {
+                        speakPodcastChunk(chunk, languageCode, apiKey)
+                    } catch (e: RateLimitException) {
+                        speakPodcastChunkWithFallbacks(chunk, azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey, onStatus, e)
                     }
-                    speakPodcastChunkWithAzure(chunk, azureApiKey, azureRegion)
                 }
                 pcm.write(bytes)
             }
@@ -489,7 +497,7 @@ class GeminiRepository(private val context: Context) {
         return Base64.decode(data, Base64.DEFAULT)
     }
 
-    // ---------------- المفاتيح الاحتياطية (Groq للتفريغ + Azure للصوت) ----------------
+    // ---------------- المفاتيح الاحتياطية (التفريغ: Groq ثم Deepgram — الصوت: Azure ثم ElevenLabs ثم Cartesia) ----------------
 
     private suspend fun transcribeWithGroq(file: File, mimeType: String, groqKey: String): String {
         if (file.length() > GROQ_MAX_FILE_BYTES) {
@@ -510,6 +518,7 @@ class GeminiRepository(private val context: Context) {
         return withContext(Dispatchers.IO) {
             http.newCall(request).execute().use { resp ->
                 if (resp.code == 429) throw RateLimitException()
+                if (resp.code == 503) throw ServiceOverloadedException()
                 if (!resp.isSuccessful) {
                     throw IllegalStateException("خطأ من Groq (${resp.code})")
                 }
@@ -519,6 +528,61 @@ class GeminiRepository(private val context: Context) {
             }
         }
     }
+
+    /** سلسلة التفريغ الاحتياطية: Groq ثم Deepgram (كل واحد مرة واحدة لكل جزء). */
+    private suspend fun transcribeWithSttFallbacks(
+        file: File,
+        mimeType: String,
+        groqKey: String,
+        deepgramKey: String,
+        onStatus: (String) -> Unit,
+        cause: RateLimitException
+    ): String {
+        if (groqKey.isNotBlank()) {
+            try {
+                onStatus(fallbackStatus(cause, "Gemini", "Groq"))
+                return transcribeWithGroq(file, mimeType, groqKey)
+            } catch (e: RateLimitException) {
+                if (deepgramKey.isBlank()) throw e
+                onStatus(fallbackStatus(e, "Groq", "Deepgram"))
+                return transcribeWithDeepgram(file, mimeType, deepgramKey)
+            }
+        }
+        onStatus(fallbackStatus(cause, "Gemini", "Deepgram"))
+        return transcribeWithDeepgram(file, mimeType, deepgramKey)
+    }
+
+    private suspend fun transcribeWithDeepgram(file: File, mimeType: String, deepgramKey: String): String {
+        val request = Request.Builder()
+            .url(DEEPGRAM_STT_URL)
+            .addHeader("Authorization", "Token $deepgramKey")
+            .post(file.asRequestBody(mimeType.toMediaType()))
+            .build()
+        return withContext(Dispatchers.IO) {
+            http.newCall(request).execute().use { resp ->
+                if (resp.code == 429) throw RateLimitException()
+                if (resp.code == 503) throw ServiceOverloadedException()
+                if (resp.code == 401 || resp.code == 403) {
+                    throw IllegalStateException("مفتاح Deepgram مش شغال — اتأكد من نسخه صح من الإعدادات.")
+                }
+                if (resp.code == 402) {
+                    throw IllegalStateException("رصيد Deepgram خلص — الرصيد المجاني ٢٠٠ دولار مرة واحدة.")
+                }
+                if (!resp.isSuccessful) {
+                    throw IllegalStateException("خطأ من Deepgram (${resp.code})")
+                }
+                val parsed = gson.fromJson(resp.body?.string(), DeepgramTranscriptionResponse::class.java)
+                parsed.results?.channels?.firstOrNull()?.alternatives?.firstOrNull()?.transcript?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: throw IllegalStateException("Deepgram رجّع نص فاضي")
+            }
+        }
+    }
+
+    /** رسالة حالة عند الانتقال من مزوّد لمزوّد بديل. */
+    private fun fallbackStatus(cause: RateLimitException, fromName: String, toName: String): String =
+        if (cause is ServiceOverloadedException) "$fromName مشغول دلوقتي — بنكمّل مع $toName…"
+        else "ليمت $fromName خلص — بنكمّل مع $toName…"
 
     private suspend fun speakChunkWithAzure(
         chunk: String,
@@ -538,6 +602,7 @@ class GeminiRepository(private val context: Context) {
         return withContext(Dispatchers.IO) {
             http.newCall(request).execute().use { resp ->
                 if (resp.code == 429) throw RateLimitException()
+                if (resp.code == 503) throw ServiceOverloadedException()
                 if (!resp.isSuccessful) {
                     throw IllegalStateException("خطأ من Azure (${resp.code})")
                 }
@@ -562,6 +627,192 @@ class GeminiRepository(private val context: Context) {
             }
             if (spoken.isBlank()) continue
             out.write(speakChunkWithAzure(spoken, voice, azureKey, azureRegion))
+        }
+        return out.toByteArray()
+    }
+
+    /** سلسلة الصوت الاحتياطية (صوت واحد): Azure ثم ElevenLabs ثم Cartesia. */
+    private suspend fun speakChunkWithFallbacks(
+        chunk: String,
+        azureApiKey: String,
+        azureRegion: String,
+        elevenLabsApiKey: String,
+        cartesiaApiKey: String,
+        gender: String,
+        onStatus: (String) -> Unit,
+        cause: RateLimitException
+    ): ByteArray {
+        var lastError: RateLimitException = cause
+        var fromName = "Gemini للصوت"
+        if (azureApiKey.isNotBlank()) {
+            try {
+                onStatus(fallbackStatus(cause, fromName, "Azure"))
+                val azureVoice = if (gender == "male") AZURE_EG_MALE_VOICE else AZURE_EG_FEMALE_VOICE
+                return speakChunkWithAzure(chunk, azureVoice, azureApiKey, azureRegion)
+            } catch (e: RateLimitException) {
+                lastError = e
+                fromName = "Azure"
+            }
+        }
+        if (elevenLabsApiKey.isNotBlank()) {
+            try {
+                onStatus(fallbackStatus(lastError, fromName, "ElevenLabs"))
+                val voiceId = if (gender == "male") ELEVENLABS_MALE_VOICE else ELEVENLABS_FEMALE_VOICE
+                return speakChunkWithElevenLabs(chunk, voiceId, elevenLabsApiKey)
+            } catch (e: RateLimitException) {
+                lastError = e
+                fromName = "ElevenLabs"
+            }
+        }
+        if (cartesiaApiKey.isNotBlank()) {
+            onStatus(fallbackStatus(lastError, fromName, "Cartesia"))
+            return speakChunkWithCartesia(chunk, cartesiaApiKey)
+        }
+        throw lastError
+    }
+
+    /** سلسلة الصوت الاحتياطية للبودكاست (كل سطر حوار لوحده): Azure ثم ElevenLabs ثم Cartesia. */
+    private suspend fun speakPodcastChunkWithFallbacks(
+        chunk: String,
+        azureApiKey: String,
+        azureRegion: String,
+        elevenLabsApiKey: String,
+        cartesiaApiKey: String,
+        onStatus: (String) -> Unit,
+        cause: RateLimitException
+    ): ByteArray {
+        var lastError: RateLimitException = cause
+        var fromName = "Gemini للصوت"
+        if (azureApiKey.isNotBlank()) {
+            try {
+                onStatus(fallbackStatus(cause, fromName, "Azure"))
+                return speakPodcastChunkWithAzure(chunk, azureApiKey, azureRegion)
+            } catch (e: RateLimitException) {
+                lastError = e
+                fromName = "Azure"
+            }
+        }
+        if (elevenLabsApiKey.isNotBlank()) {
+            try {
+                onStatus(fallbackStatus(lastError, fromName, "ElevenLabs"))
+                return speakPodcastChunkWithElevenLabs(chunk, elevenLabsApiKey)
+            } catch (e: RateLimitException) {
+                lastError = e
+                fromName = "ElevenLabs"
+            }
+        }
+        if (cartesiaApiKey.isNotBlank()) {
+            onStatus(fallbackStatus(lastError, fromName, "Cartesia"))
+            return speakPodcastChunkWithCartesia(chunk, cartesiaApiKey)
+        }
+        throw lastError
+    }
+
+    private suspend fun speakChunkWithElevenLabs(
+        chunk: String,
+        voiceId: String,
+        elevenLabsKey: String
+    ): ByteArray {
+        val json = gson.toJson(
+            mapOf(
+                "text" to chunk,
+                "model_id" to ELEVENLABS_TTS_MODEL,
+                "voice_settings" to mapOf("stability" to 0.5, "similarity_boost" to 0.75)
+            )
+        )
+        val request = Request.Builder()
+            .url("$ELEVENLABS_TTS_URL/$voiceId?output_format=pcm_24000")
+            .addHeader("xi-api-key", elevenLabsKey)
+            .post(json.toRequestBody("application/json".toMediaType()))
+            .build()
+        return withContext(Dispatchers.IO) {
+            http.newCall(request).execute().use { resp ->
+                if (resp.code == 429) throw RateLimitException()
+                if (resp.code == 503) throw ServiceOverloadedException()
+                if (resp.code == 401 || resp.code == 403) {
+                    throw IllegalStateException("مفتاح ElevenLabs مش شغال — اتأكد من نسخه صح من الإعدادات.")
+                }
+                if (resp.code == 402) {
+                    throw IllegalStateException("رصيد ElevenLabs المجاني خلص — بييجي ١٠ آلاف نقطة جديدة كل شهر.")
+                }
+                if (!resp.isSuccessful) {
+                    throw IllegalStateException("خطأ من ElevenLabs (${resp.code})")
+                }
+                val bytes = resp.body?.bytes() ?: throw IllegalStateException("ElevenLabs رجّع صوت فاضي")
+                if (bytes.isEmpty()) throw IllegalStateException("ElevenLabs رجّع صوت فاضي")
+                bytes
+            }
+        }
+    }
+
+    private suspend fun speakPodcastChunkWithElevenLabs(chunk: String, elevenLabsKey: String): ByteArray {
+        val out = ByteArrayOutputStream()
+        for (line in chunk.lines()) {
+            val trimmed = line.trim()
+            if (trimmed.isBlank()) continue
+            val (voiceId, spoken) = when {
+                trimmed.startsWith("Speaker1:") -> ELEVENLABS_MALE_VOICE to trimmed.removePrefix("Speaker1:").trim()
+                trimmed.startsWith("Speaker2:") -> ELEVENLABS_FEMALE_VOICE to trimmed.removePrefix("Speaker2:").trim()
+                else -> continue
+            }
+            if (spoken.isBlank()) continue
+            out.write(speakChunkWithElevenLabs(spoken, voiceId, elevenLabsKey))
+        }
+        return out.toByteArray()
+    }
+
+    private suspend fun speakChunkWithCartesia(chunk: String, cartesiaKey: String): ByteArray {
+        val json = gson.toJson(
+            mapOf(
+                "model_id" to CARTESIA_TTS_MODEL,
+                "transcript" to chunk,
+                "voice" to CARTESIA_VOICE,
+                "output_format" to mapOf(
+                    "container" to "raw",
+                    "encoding" to "pcm_s16le",
+                    "sample_rate" to 24000
+                ),
+                "language" to "ar"
+            )
+        )
+        val request = Request.Builder()
+            .url(CARTESIA_TTS_URL)
+            .addHeader("X-API-Key", cartesiaKey)
+            .addHeader("Cartesia-Version", "2024-06-10")
+            .post(json.toRequestBody("application/json".toMediaType()))
+            .build()
+        return withContext(Dispatchers.IO) {
+            http.newCall(request).execute().use { resp ->
+                if (resp.code == 429) throw RateLimitException()
+                if (resp.code == 503) throw ServiceOverloadedException()
+                if (resp.code == 401 || resp.code == 403) {
+                    throw IllegalStateException("مفتاح Cartesia مش شغال — اتأكد من نسخه صح من الإعدادات.")
+                }
+                if (resp.code == 402) {
+                    throw IllegalStateException("رصيد Cartesia المجاني خلص — بييجي ٢٠ ألف نقطة جديدة كل شهر.")
+                }
+                if (!resp.isSuccessful) {
+                    throw IllegalStateException("خطأ من Cartesia (${resp.code})")
+                }
+                val bytes = resp.body?.bytes() ?: throw IllegalStateException("Cartesia رجّع صوت فاضي")
+                if (bytes.isEmpty()) throw IllegalStateException("Cartesia رجّع صوت فاضي")
+                bytes
+            }
+        }
+    }
+
+    private suspend fun speakPodcastChunkWithCartesia(chunk: String, cartesiaKey: String): ByteArray {
+        val out = ByteArrayOutputStream()
+        for (line in chunk.lines()) {
+            val trimmed = line.trim()
+            if (trimmed.isBlank()) continue
+            val spoken = when {
+                trimmed.startsWith("Speaker1:") -> trimmed.removePrefix("Speaker1:").trim()
+                trimmed.startsWith("Speaker2:") -> trimmed.removePrefix("Speaker2:").trim()
+                else -> continue
+            }
+            if (spoken.isBlank()) continue
+            out.write(speakChunkWithCartesia(spoken, cartesiaKey))
         }
         return out.toByteArray()
     }
