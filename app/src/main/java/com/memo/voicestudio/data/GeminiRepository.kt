@@ -20,7 +20,10 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
 
-class RateLimitException : Exception()
+open class RateLimitException : Exception()
+
+/** الخدمة مشغولة مؤقتًا (ضغط عالي) — تُعامل مثل تجاوز الحد: إعادة محاولة أو التبديل للبديل. */
+class ServiceOverloadedException : RateLimitException()
 
 /**
  * كل التعامل مع Gemini API هنا:
@@ -167,7 +170,11 @@ class GeminiRepository(private val context: Context) {
                     try {
                         transcribeFile(fileName, audioMime, apiKey)
                     } catch (e: RateLimitException) {
-                        onStatus("ليمت Gemini خلص — بنكمّل مع Groq…")
+                        if (e is ServiceOverloadedException) {
+                            onStatus("Gemini مشغول دلوقتي — بنكمّل مع Groq…")
+                        } else {
+                            onStatus("ليمت Gemini خلص — بنكمّل مع Groq…")
+                        }
                         transcribeWithGroq(seg, audioMime, groqApiKey)
                     }
                 }
@@ -175,9 +182,12 @@ class GeminiRepository(private val context: Context) {
             }
             Result.success(out.toString().trim())
         } catch (e: RateLimitException) {
-            Result.failure(
-                IllegalStateException("وصلت للحد المجاني — استنى دقيقة وجرّب تاني، أو كمّل بكرة.")
-            )
+            val msg = if (e is ServiceOverloadedException) {
+                "Gemini مشغول دلوقتي من كتر الطلب — استنى شوية وجرّب تاني."
+            } else {
+                "وصلت للحد المجاني — استنى دقيقة وجرّب تاني، أو كمّل بكرة."
+            }
+            Result.failure(IllegalStateException(msg))
         } catch (e: Exception) {
             Result.failure(
                 IllegalStateException("حصلت مشكلة أثناء التفريغ: ${e.message ?: "خطأ غير معروف"}")
@@ -219,6 +229,7 @@ class GeminiRepository(private val context: Context) {
             api.generateContent(TRANSCRIBE_MODEL, apiKey, body)
         }
         if (resp.code() == 429) throw RateLimitException()
+        if (resp.code() == 503) throw ServiceOverloadedException()
         if (!resp.isSuccessful) {
             throw IllegalStateException("خطأ من الخدمة (${resp.code()})${serviceErrorDetail(resp)}")
         }
@@ -312,7 +323,11 @@ class GeminiRepository(private val context: Context) {
                     speakChunkWithRetry(chunk, voiceName, languageCode, style, apiKey)
                 } catch (e: RateLimitException) {
                     if (azureApiKey.isBlank()) throw e
-                    onStatus("ليمت Gemini للصوت خلص — بنكمّل مع Azure…")
+                    if (e is ServiceOverloadedException) {
+                        onStatus("Gemini للصوت مشغول دلوقتي — بنكمّل مع Azure…")
+                    } else {
+                        onStatus("ليمت Gemini للصوت خلص — بنكمّل مع Azure…")
+                    }
                     speakChunkWithAzure(chunk, azureVoice, azureApiKey, azureRegion)
                 }
                 pcm.write(bytes)
@@ -321,9 +336,12 @@ class GeminiRepository(private val context: Context) {
             wav.writeBytes(AudioUtils.pcmToWav(pcm.toByteArray(), 24000))
             Result.success(wav)
         } catch (e: RateLimitException) {
-            Result.failure(
-                IllegalStateException("وصلت للحد المجاني لليوم — استنى شوية وجرّب تاني.")
-            )
+            val msg = if (e is ServiceOverloadedException) {
+                "Gemini مشغول دلوقتي من كتر الطلب — استنى شوية وجرّب تاني."
+            } else {
+                "وصلت للحد المجاني لليوم — استنى شوية وجرّب تاني."
+            }
+            Result.failure(IllegalStateException(msg))
         } catch (e: Exception) {
             Result.failure(
                 IllegalStateException("حصلت مشكلة أثناء توليد الصوت: ${e.message ?: "خطأ غير معروف"}")
@@ -355,7 +373,11 @@ class GeminiRepository(private val context: Context) {
                     speakPodcastChunkWithRetry(chunk, languageCode, apiKey)
                 } catch (e: RateLimitException) {
                     if (azureApiKey.isBlank()) throw e
-                    onStatus("ليمت Gemini للصوت خلص — بنكمّل مع Azure…")
+                    if (e is ServiceOverloadedException) {
+                        onStatus("Gemini للصوت مشغول دلوقتي — بنكمّل مع Azure…")
+                    } else {
+                        onStatus("ليمت Gemini للصوت خلص — بنكمّل مع Azure…")
+                    }
                     speakPodcastChunkWithAzure(chunk, azureApiKey, azureRegion)
                 }
                 pcm.write(bytes)
@@ -364,9 +386,12 @@ class GeminiRepository(private val context: Context) {
             wav.writeBytes(AudioUtils.pcmToWav(pcm.toByteArray(), 24000))
             Result.success(wav)
         } catch (e: RateLimitException) {
-            Result.failure(
-                IllegalStateException("وصلت للحد المجاني لليوم — استنى شوية وجرّب تاني.")
-            )
+            val msg = if (e is ServiceOverloadedException) {
+                "Gemini مشغول دلوقتي من كتر الطلب — استنى شوية وجرّب تاني."
+            } else {
+                "وصلت للحد المجاني لليوم — استنى شوية وجرّب تاني."
+            }
+            Result.failure(IllegalStateException(msg))
         } catch (e: Exception) {
             Result.failure(
                 IllegalStateException("حصلت مشكلة أثناء توليد البودكاست: ${e.message ?: "خطأ غير معروف"}")
@@ -454,6 +479,7 @@ class GeminiRepository(private val context: Context) {
             api.generateContent(TTS_MODEL, apiKey, body)
         }
         if (resp.code() == 429) throw RateLimitException()
+        if (resp.code() == 503) throw ServiceOverloadedException()
         if (!resp.isSuccessful) {
             throw IllegalStateException("خطأ من خدمة الصوت (${resp.code()})${serviceErrorDetail(resp)}")
         }
@@ -584,6 +610,7 @@ class GeminiRepository(private val context: Context) {
             api.generateContent(TTS_MODEL, apiKey, body)
         }
         if (resp.code() == 429) throw RateLimitException()
+        if (resp.code() == 503) throw ServiceOverloadedException()
         if (!resp.isSuccessful) {
             throw IllegalStateException("خطأ من خدمة الصوت (${resp.code()})${serviceErrorDetail(resp)}")
         }
