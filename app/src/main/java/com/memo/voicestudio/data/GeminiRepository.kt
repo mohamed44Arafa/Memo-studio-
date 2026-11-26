@@ -76,6 +76,11 @@ class GeminiRepository(private val context: Context) {
         const val CARTESIA_TTS_URL = "https://api.cartesia.ai/tts/bytes"
         const val CARTESIA_TTS_MODEL = "sonic-3.6"
         const val CARTESIA_VOICE = "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4"
+        const val GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
+        const val DEEPGRAM_PROJECTS_URL = "https://api.deepgram.com/v1/projects"
+        const val ELEVENLABS_USER_URL = "https://api.elevenlabs.io/v1/user"
+        const val CARTESIA_VOICES_URL = "https://api.cartesia.ai/voices"
+        const val CARTESIA_API_VERSION = "2024-06-10"
 
         /** أقصى طول للجزء الواحد عند التفريغ (50 دقيقة — أقل من حد الساعة) */
         const val MAX_SEGMENT_MS = 50L * 60L * 1000L
@@ -129,6 +134,66 @@ class GeminiRepository(private val context: Context) {
             resp.isSuccessful
         } catch (e: Exception) {
             false
+        }
+    }
+
+    // ---------------- اختبار مفاتيح البدائل (نقطة تحقق رخيصة — من غير استهلاك رصيد) ----------------
+
+    suspend fun testGroqKey(key: String): Result<Unit> {
+        if (key.isBlank()) return Result.failure(IllegalStateException("حط مفتاح Groq الأول."))
+        return testKeyEndpoint(GROQ_MODELS_URL, mapOf("Authorization" to "Bearer $key"))
+    }
+
+    suspend fun testAzureKey(key: String, region: String): Result<Unit> {
+        if (key.isBlank()) return Result.failure(IllegalStateException("حط مفتاح Azure الأول."))
+        val host = region.ifBlank { "westeurope" }
+        return testKeyEndpoint(
+            "https://$host.tts.speech.microsoft.com/cognitiveservices/voices/list",
+            mapOf("Ocp-Apim-Subscription-Key" to key),
+            badKeyMessage = "المفتاح غلط أو المنطقة غلط — اتأكد من الاتنين من الإعدادات."
+        )
+    }
+
+    suspend fun testDeepgramKey(key: String): Result<Unit> {
+        if (key.isBlank()) return Result.failure(IllegalStateException("حط مفتاح Deepgram الأول."))
+        return testKeyEndpoint(DEEPGRAM_PROJECTS_URL, mapOf("Authorization" to "Token $key"))
+    }
+
+    suspend fun testElevenLabsKey(key: String): Result<Unit> {
+        if (key.isBlank()) return Result.failure(IllegalStateException("حط مفتاح ElevenLabs الأول."))
+        return testKeyEndpoint(ELEVENLABS_USER_URL, mapOf("xi-api-key" to key))
+    }
+
+    suspend fun testCartesiaKey(key: String): Result<Unit> {
+        if (key.isBlank()) return Result.failure(IllegalStateException("حط مفتاح Cartesia الأول."))
+        return testKeyEndpoint(
+            CARTESIA_VOICES_URL,
+            mapOf("X-API-Key" to key, "Cartesia-Version" to CARTESIA_API_VERSION)
+        )
+    }
+
+    /** فحص سريع لمفتاح عبر GET — المفتاح الغلط (401/403) رسالته غير رسالة الخدمة المشغولة (429/503). */
+    private suspend fun testKeyEndpoint(
+        url: String,
+        headers: Map<String, String>,
+        badKeyMessage: String = "المفتاح غلط — اتأكد من نسخه صح من الإعدادات."
+    ): Result<Unit> {
+        val builder = Request.Builder().url(url).get()
+        headers.forEach { (name, value) -> builder.addHeader(name, value) }
+        return try {
+            withContext(Dispatchers.IO) {
+                http.newCall(builder.build()).execute().use { resp ->
+                    when {
+                        resp.isSuccessful -> Result.success(Unit)
+                        resp.code == 401 || resp.code == 403 -> Result.failure(IllegalStateException(badKeyMessage))
+                        resp.code == 402 -> Result.failure(IllegalStateException("رصيد الخدمة خلص."))
+                        resp.code == 429 || resp.code == 503 -> Result.failure(IllegalStateException("الخدمة مشغولة دلوقتي — جرّب تاني بعد شوية."))
+                        else -> Result.failure(IllegalStateException("خطأ من الخدمة (${resp.code})"))
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(IllegalStateException("مفيش اتصال بالإنترنت — اتأكد من الشبكة وجرّب تاني."))
         }
     }
 

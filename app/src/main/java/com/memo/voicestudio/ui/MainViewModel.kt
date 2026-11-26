@@ -54,6 +54,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var isTestingKey by mutableStateOf(false)
         private set
+    var groqKeyTest by mutableStateOf<String?>(null)
+        private set
+    var isTestingGroqKey by mutableStateOf(false)
+        private set
+    var azureKeyTest by mutableStateOf<String?>(null)
+        private set
+    var isTestingAzureKey by mutableStateOf(false)
+        private set
+    var deepgramKeyTest by mutableStateOf<String?>(null)
+        private set
+    var isTestingDeepgramKey by mutableStateOf(false)
+        private set
+    var elevenLabsKeyTest by mutableStateOf<String?>(null)
+        private set
+    var isTestingElevenLabsKey by mutableStateOf(false)
+        private set
+    var cartesiaKeyTest by mutableStateOf<String?>(null)
+        private set
+    var isTestingCartesiaKey by mutableStateOf(false)
+        private set
 
     fun saveApiKey(value: String) {
         apiKey = value.trim()
@@ -141,6 +161,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val ok = withContext(Dispatchers.IO) { repo.testKey(apiKey.trim()) }
             keyTest = if (ok) "المفتاح شغال ✔" else "المفتاح مش شغال — اتأكد من نسخه صح وحاول تاني"
             isTestingKey = false
+        }
+    }
+
+    fun testGroqKey() {
+        viewModelScope.launch {
+            isTestingGroqKey = true
+            groqKeyTest = null
+            val result = withContext(Dispatchers.IO) { repo.testGroqKey(groqApiKey.trim()) }
+            groqKeyTest = result.fold(
+                onSuccess = { "المفتاح شغال ✔" },
+                onFailure = { "المفتاح مش شغال: ${it.message ?: "خطأ غير معروف"}" }
+            )
+            isTestingGroqKey = false
+        }
+    }
+
+    fun testAzureKey() {
+        viewModelScope.launch {
+            isTestingAzureKey = true
+            azureKeyTest = null
+            val result = withContext(Dispatchers.IO) { repo.testAzureKey(azureApiKey.trim(), azureRegion.trim()) }
+            azureKeyTest = result.fold(
+                onSuccess = { "المفتاح شغال ✔" },
+                onFailure = { "المفتاح مش شغال: ${it.message ?: "خطأ غير معروف"}" }
+            )
+            isTestingAzureKey = false
+        }
+    }
+
+    fun testDeepgramKey() {
+        viewModelScope.launch {
+            isTestingDeepgramKey = true
+            deepgramKeyTest = null
+            val result = withContext(Dispatchers.IO) { repo.testDeepgramKey(deepgramApiKey.trim()) }
+            deepgramKeyTest = result.fold(
+                onSuccess = { "المفتاح شغال ✔" },
+                onFailure = { "المفتاح مش شغال: ${it.message ?: "خطأ غير معروف"}" }
+            )
+            isTestingDeepgramKey = false
+        }
+    }
+
+    fun testElevenLabsKey() {
+        viewModelScope.launch {
+            isTestingElevenLabsKey = true
+            elevenLabsKeyTest = null
+            val result = withContext(Dispatchers.IO) { repo.testElevenLabsKey(elevenLabsApiKey.trim()) }
+            elevenLabsKeyTest = result.fold(
+                onSuccess = { "المفتاح شغال ✔" },
+                onFailure = { "المفتاح مش شغال: ${it.message ?: "خطأ غير معروف"}" }
+            )
+            isTestingElevenLabsKey = false
+        }
+    }
+
+    fun testCartesiaKey() {
+        viewModelScope.launch {
+            isTestingCartesiaKey = true
+            cartesiaKeyTest = null
+            val result = withContext(Dispatchers.IO) { repo.testCartesiaKey(cartesiaApiKey.trim()) }
+            cartesiaKeyTest = result.fold(
+                onSuccess = { "المفتاح شغال ✔" },
+                onFailure = { "المفتاح مش شغال: ${it.message ?: "خطأ غير معروف"}" }
+            )
+            isTestingCartesiaKey = false
         }
     }
 

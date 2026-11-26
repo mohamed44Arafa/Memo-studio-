@@ -137,6 +137,22 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onClick = { viewModel.saveGroqApiKey(groqInput) },
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) { Text("حفظ مفتاح Groq", fontSize = 16.sp) }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = { viewModel.testGroqKey() },
+            enabled = !viewModel.isTestingGroqKey && viewModel.groqApiKey.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("اختبر مفتاح Groq", fontSize = 16.sp) }
+        if (viewModel.isTestingGroqKey) {
+            Spacer(Modifier.height(12.dp))
+            CircularProgressIndicator()
+            Spacer(Modifier.height(8.dp))
+            Text("جارٍ الاختبار…", fontSize = 16.sp)
+        }
+        if (viewModel.groqKeyTest != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(viewModel.groqKeyTest ?: "", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
         Spacer(Modifier.height(8.dp))
         Text("مجاني ومن غير كارت — من console.groq.com/keys", fontSize = 14.sp)
         Spacer(Modifier.height(20.dp))
@@ -164,6 +180,22 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onClick = { viewModel.saveAzureApiKey(azureInput); viewModel.saveAzureRegion(regionInput) },
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) { Text("حفظ مفتاح Azure", fontSize = 16.sp) }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = { viewModel.testAzureKey() },
+            enabled = !viewModel.isTestingAzureKey && viewModel.azureApiKey.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("اختبر مفتاح Azure", fontSize = 16.sp) }
+        if (viewModel.isTestingAzureKey) {
+            Spacer(Modifier.height(12.dp))
+            CircularProgressIndicator()
+            Spacer(Modifier.height(8.dp))
+            Text("جارٍ الاختبار…", fontSize = 16.sp)
+        }
+        if (viewModel.azureKeyTest != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(viewModel.azureKeyTest ?: "", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
         Spacer(Modifier.height(8.dp))
         Text("فيه صوت مصري — من Azure، وممكن يطلب كارت.", fontSize = 14.sp)
         Spacer(Modifier.height(20.dp))
@@ -183,6 +215,22 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onClick = { viewModel.saveDeepgramApiKey(deepgramInput) },
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) { Text("حفظ مفتاح Deepgram", fontSize = 16.sp) }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = { viewModel.testDeepgramKey() },
+            enabled = !viewModel.isTestingDeepgramKey && viewModel.deepgramApiKey.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("اختبر مفتاح Deepgram", fontSize = 16.sp) }
+        if (viewModel.isTestingDeepgramKey) {
+            Spacer(Modifier.height(12.dp))
+            CircularProgressIndicator()
+            Spacer(Modifier.height(8.dp))
+            Text("جارٍ الاختبار…", fontSize = 16.sp)
+        }
+        if (viewModel.deepgramKeyTest != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(viewModel.deepgramKeyTest ?: "", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
         Spacer(Modifier.height(8.dp))
         Text("من deepgram.com ← Console ← API Keys — رصيد ٢٠٠ دولار مرة واحدة", fontSize = 14.sp)
         Spacer(Modifier.height(20.dp))
@@ -202,6 +250,22 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onClick = { viewModel.saveElevenLabsApiKey(elevenLabsInput) },
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) { Text("حفظ مفتاح ElevenLabs", fontSize = 16.sp) }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = { viewModel.testElevenLabsKey() },
+            enabled = !viewModel.isTestingElevenLabsKey && viewModel.elevenLabsApiKey.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("اختبر مفتاح ElevenLabs", fontSize = 16.sp) }
+        if (viewModel.isTestingElevenLabsKey) {
+            Spacer(Modifier.height(12.dp))
+            CircularProgressIndicator()
+            Spacer(Modifier.height(8.dp))
+            Text("جارٍ الاختبار…", fontSize = 16.sp)
+        }
+        if (viewModel.elevenLabsKeyTest != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(viewModel.elevenLabsKeyTest ?: "", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
         Spacer(Modifier.height(8.dp))
         Text("من elevenlabs.io — مفتاح API — ١٠ آلاف نقطة كل شهر", fontSize = 14.sp)
         Spacer(Modifier.height(20.dp))
@@ -221,6 +285,22 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onClick = { viewModel.saveCartesiaApiKey(cartesiaInput) },
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) { Text("حفظ مفتاح Cartesia", fontSize = 16.sp) }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = { viewModel.testCartesiaKey() },
+            enabled = !viewModel.isTestingCartesiaKey && viewModel.cartesiaApiKey.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("اختبر مفتاح Cartesia", fontSize = 16.sp) }
+        if (viewModel.isTestingCartesiaKey) {
+            Spacer(Modifier.height(12.dp))
+            CircularProgressIndicator()
+            Spacer(Modifier.height(8.dp))
+            Text("جارٍ الاختبار…", fontSize = 16.sp)
+        }
+        if (viewModel.cartesiaKeyTest != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(viewModel.cartesiaKeyTest ?: "", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
         Spacer(Modifier.height(8.dp))
         Text("من cartesia.ai ← Play ← API key — ٢٠ ألف نقطة كل شهر", fontSize = 14.sp)
 
