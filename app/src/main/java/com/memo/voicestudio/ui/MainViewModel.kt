@@ -192,7 +192,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             player = MediaPlayer().apply {
                 setDataSource(file.absolutePath)
                 setOnCompletionListener {
-                    isPlaying = false
+                    onPlaybackFinished()
                 }
                 prepare()
                 start()
@@ -201,6 +201,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } catch (e: Exception) {
             speakStatus = "مش قادر أشغّل الصوت: ${e.message ?: ""}"
         }
+    }
+
+    private fun onPlaybackFinished() {
+        isPlaying = false
     }
 
     fun stopAudio() {
@@ -312,7 +316,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     put(MediaStore.Downloads.MIME_TYPE, mimeType)
                     put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                 }
-                val uri: Uri? = context.contentResolver.insert(
+                val uri = context.contentResolver.insert(
                     MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
                 ) ?: return null
                 context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
