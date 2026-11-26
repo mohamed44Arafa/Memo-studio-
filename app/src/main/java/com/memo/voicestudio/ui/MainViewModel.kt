@@ -14,10 +14,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.memo.voicestudio.TranscriptionService
+import com.memo.voicestudio.TranscriptionStore
 import com.memo.voicestudio.data.GeminiRepository
 import com.memo.voicestudio.data.PdfText
 import com.memo.voicestudio.data.SettingsStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -240,32 +243,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var sharedText by mutableStateOf("")
         private set
+    var transSegmentCurrent by mutableStateOf(0)
+        private set
+    var transSegmentTotal by mutableStateOf(0)
+        private set
+
+    init {
+        // لو تفريغ خلص والتطبيق اتقفل واتفتح تاني، اعرض آخر نتيجة محفوظة.
+        viewModelScope.launch(Dispatchers.IO) {
+            val last = TranscriptionStore.loadLastResult(getApplication())
+            if (last != null && !TranscriptionStore.state.value.running) {
+                withContext(Dispatchers.Main) {
+                    transResult = last
+                    sharedText = last
+                    transStatus = "خلص التفريغ ✔"
+                }
+            }
+        }
+        // تابع حالة التفريغ اللي شغال في الخلفية (تقدم/نتيجة/خطأ) — الشاشة
+        // توري التقدم الحالي بدل ما تبدأ من جديد لما المستخدم يرجع.
+        viewModelScope.launch {
+            TranscriptionStore.state.collect { state ->
+                isTranscribing = state.running
+                if (state.fileName.isNotBlank()) transFileName = state.fileName
+                if (state.status.isNotBlank()) transStatus = state.status
+                transSegmentCurrent = state.currentSegment
+                transSegmentTotal = state.totalSegments
+                if (state.result.isNotBlank()) {
+                    transResult = state.result
+                    sharedText = state.result
+                }
+            }
+        }
+    }
 
     fun transcribe(file: File, mimeType: String) {
         transFileName = file.name
-        viewModelScope.launch(Dispatchers.IO) {
-            isTranscribing = true
-            transStatus = "بنبدأ…"
-            transResult = ""
-            val result = repo.transcribe(
-                file, mimeType, apiKey.trim(),
-                onStatus = { status -> transStatus = status },
-                groqApiKey = groqApiKey.trim(),
-                deepgramApiKey = deepgramApiKey.trim()
-            )
-            withContext(Dispatchers.Main) {
-                isTranscribing = false
-                result
-                    .onSuccess {
-                        transResult = it
-                        sharedText = it
-                        transStatus = "خلص التفريغ ✔"
-                    }
-                    .onFailure {
-                        transStatus = it.message ?: "حصل خطأ"
-                    }
-            }
-        }
+        transResult = ""
+        transStatus = "بنبدأ…"
+        transSegmentCurrent = 0
+        transSegmentTotal = 0
+        isTranscribing = true
+        // التفريغ بيشتغل في فورجراوند سيرفس عشان يكمّل في الخلفية.
+        TranscriptionService.start(getApplication(), file, mimeType)
     }
 
     fun setStatusMessage(message: String) {

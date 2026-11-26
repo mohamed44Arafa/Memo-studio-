@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Base64
 import com.google.gson.Gson
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
@@ -205,7 +206,9 @@ class GeminiRepository(private val context: Context) {
         apiKey: String,
         onStatus: (String) -> Unit,
         groqApiKey: String = "",
-        deepgramApiKey: String = ""
+        deepgramApiKey: String = "",
+        // تقدّم التفريغ: الجزء الحالي (يبدأ من 1) من إجمالي الأجزاء — للسيرفس والإشعار.
+        onProgress: ((currentSegment: Int, totalSegments: Int) -> Unit)? = null
     ): Result<String> {
         if (apiKey.isBlank()) {
             return Result.failure(IllegalStateException("لا يوجد مفتاح — أدخل مفتاح Gemini من الإعدادات أولاً."))
@@ -235,6 +238,7 @@ class GeminiRepository(private val context: Context) {
 
             val out = StringBuilder()
             for ((i, seg) in segments.withIndex()) {
+                onProgress?.invoke(i + 1, segments.size)
                 onStatus("بنرفع الجزء ${i + 1} من ${segments.size}…")
                 val fileName = uploadFile(seg, audioMime, apiKey)
                 onStatus("بنستنى تجهيز الجزء ${i + 1}…")
@@ -261,6 +265,8 @@ class GeminiRepository(private val context: Context) {
             }
             Result.failure(IllegalStateException(msg))
         } catch (e: Exception) {
+            // الإلغاء مش خطأ — لازم يعدّي زي ما هو عشان السيرفس يوقف من غير رسالة خطأ.
+            if (e is CancellationException) throw e
             Result.failure(
                 IllegalStateException("حصلت مشكلة أثناء التفريغ: ${e.message ?: "خطأ غير معروف"}")
             )

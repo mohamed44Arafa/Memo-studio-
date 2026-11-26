@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.width
@@ -119,6 +120,26 @@ fun TranscribeScreen(viewModel: MainViewModel, onGoToSpeak: () -> Unit) {
                 Spacer(Modifier.width(12.dp))
                 Text("جارٍ التفريغ…", fontSize = 16.sp)
             }
+            if (viewModel.transSegmentTotal > 1) {
+                Spacer(Modifier.height(12.dp))
+                LinearProgressIndicator(
+                    progress = {
+                        (viewModel.transSegmentCurrent - 1).coerceAtLeast(0).toFloat() /
+                            viewModel.transSegmentTotal
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "الجزء ${viewModel.transSegmentCurrent} من ${viewModel.transSegmentTotal}",
+                    fontSize = 16.sp
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "التفريغ شغال في الخلفية — تقدر تخرج من التطبيق وهيكمّل، وهتلاقي إشعار بالتقدم.",
+                fontSize = 16.sp
+            )
         }
 
         if (viewModel.transStatus.isNotBlank()) {
