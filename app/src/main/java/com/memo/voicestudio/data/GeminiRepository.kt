@@ -13,6 +13,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.io.ByteArrayOutputStream
@@ -184,23 +185,23 @@ class GeminiRepository(private val context: Context) {
     }
 
     private suspend fun transcribeFile(fileName: String, mimeType: String, apiKey: String): String {
+        // حسب توثيق Google الرسمي لموديل gemini-3.5-transcribe:
+        // الطلب يحتوي على ملف الصوت فقط، بدون أي نص إضافي وبدون generationConfig.
         val body = GenerateRequest(
             contents = listOf(
                 Content(
                     parts = listOf(
-                        Part(fileData = FileData(mimeType, "files/$fileName")),
-                        Part(text = "فرّغ الصوت التالي إلى نص عربي كما هو منطوق تمامًا، دون تلخيص أو إضافة.")
+                        Part(fileData = FileData(mimeType, "files/$fileName"))
                     )
                 )
-            ),
-            generationConfig = GenerationConfig(responseMimeType = "text/plain")
+            )
         )
         val resp = withContext(Dispatchers.IO) {
             api.generateContent(TRANSCRIBE_MODEL, apiKey, body)
         }
         if (resp.code() == 429) throw RateLimitException()
         if (!resp.isSuccessful) {
-            throw IllegalStateException("خطأ من الخدمة (${resp.code()})")
+            throw IllegalStateException("خطأ من الخدمة (${resp.code()})${serviceErrorDetail(resp)}")
         }
         val text = resp.body()?.candidates?.firstOrNull()?.content?.parts
             ?.mapNotNull { it.text }
@@ -209,6 +210,16 @@ class GeminiRepository(private val context: Context) {
             throw IllegalStateException("الخدمة رجّعت نص فاضي — جرّب تاني أو قسّم الملف.")
         }
         return text
+    }
+
+    /** يقرأ رسالة الخطأ الحقيقية من رد الخدمة (أول 300 حرف) عشان تظهر للمستخدم. */
+    private fun serviceErrorDetail(resp: Response<*>): String {
+        val detail = try {
+            resp.errorBody()?.string()?.trim().orEmpty()
+        } catch (e: Exception) {
+            ""
+        }
+        return if (detail.isBlank()) "" else ": ${detail.take(300)}"
     }
 
     private suspend fun uploadFile(file: File, mimeType: String, apiKey: String): String {
@@ -330,7 +341,7 @@ class GeminiRepository(private val context: Context) {
         }
         if (resp.code() == 429) throw RateLimitException()
         if (!resp.isSuccessful) {
-            throw IllegalStateException("خطأ من خدمة الصوت (${resp.code()})")
+            throw IllegalStateException("خطأ من خدمة الصوت (${resp.code()})${serviceErrorDetail(resp)}")
         }
         val data = resp.body()?.candidates?.firstOrNull()?.content?.parts
             ?.firstOrNull { it.inlineData != null }?.inlineData?.data
@@ -393,7 +404,7 @@ class GeminiRepository(private val context: Context) {
             }
             if (resp.code() == 429) throw RateLimitException()
             if (!resp.isSuccessful) {
-                throw IllegalStateException("خطأ من الخدمة (${resp.code()})")
+                throw IllegalStateException("خطأ من الخدمة (${resp.code()})${serviceErrorDetail(resp)}")
             }
             val text = resp.body()?.candidates?.firstOrNull()?.content?.parts
                 ?.mapNotNull { it.text }
