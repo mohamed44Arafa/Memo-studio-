@@ -39,13 +39,13 @@ class ServiceOverloadedException : RateLimitException()
 /** رصيد المزوّد المجاني خلص — يُعامل مثل تجاوز الحد: التبديل للبديل. */
 class CreditExhaustedException(message: String) : Exception(message)
 
-/** خطأ داخلي من سيرفر الخدمة (500 مثلاً) — يستاهل التبديل للمزوّد البديل زي الضغط تمامًا. */
-class ServerErrorException(message: String) : Exception(message)
+/** المزوّد رفض الطلب أو حصله خطأ داخلي (400 أو 500 مثلاً) — يستاهل التبديل للمزوّد البديل زي الضغط تمامًا. */
+class ProviderFailureException(message: String) : Exception(message)
 
-    /** يرمي الاستثناء المناسب لرد غير ناجح: أخطاء السيرفر (5xx) تتبدّل للبديل، والباقي خطأ عادي بنفس رسالته. */
+    /** يرمي الاستثناء المناسب لرد غير ناجح: رفض المزوّد للطلب (400) أو أخطاء السيرفر (5xx) تتبدّل للبديل، والباقي خطأ عادي بنفس رسالته. */
     private fun throwServiceError(prefix: String, code: Int, detail: String): Nothing {
         val msg = "$prefix ($code)$detail"
-        if (code in 500..599) throw ServerErrorException(msg)
+        if (code == 400 || code in 500..599) throw ProviderFailureException(msg)
         throw IllegalStateException(msg)
     }
 
@@ -289,8 +289,13 @@ class GeminiRepository(private val context: Context) {
         return try {
             onStatus("بنجهّز الملف…")
             var audioFile = source
+            // الملفات اللي اسمها غريب من غير امتداد (زي mp4.339206) نوعها بيطلع "application/octet-stream" —
+            // نكشف نوعها من المحتوى نفسه، عشان استخراج الصوت والرفع يشتغلوا صح.
             var audioMime = mimeType
-            if (mimeType.startsWith("video/")) {
+            if (audioMime == "application/octet-stream") {
+                AudioUtils.probeMimeType(source)?.let { audioMime = it }
+            }
+            if (audioMime.startsWith("video/")) {
                 onStatus("بنستخرج الصوت من الفيديو…")
                 val extracted = AudioUtils.extractAudioTrack(source, context.cacheDir)
                 if (extracted != null) {
@@ -404,7 +409,7 @@ class GeminiRepository(private val context: Context) {
             } catch (e: RateLimitException) {
                 if (attempt >= 2) throw e
                 delay(65_000)
-            } catch (e: ServerErrorException) {
+            } catch (e: ProviderFailureException) {
                 if (attempt >= 2) throw e
                 delay(65_000)
             }
@@ -468,7 +473,7 @@ class GeminiRepository(private val context: Context) {
             http.newCall(request).executeCancellable().use { resp ->
                 if (resp.code == 429) throw RateLimitException()
                 if (!resp.isSuccessful) {
-                    throw IllegalStateException("فشل رفع الملف (${resp.code})")
+                    throwServiceError("فشل رفع الملف", resp.code, "")
                 }
                 val parsed = gson.fromJson(resp.body?.string(), FileUploadResponse::class.java)
                 val name = parsed.file?.name
@@ -483,11 +488,11 @@ class GeminiRepository(private val context: Context) {
             val resp = withContext(Dispatchers.IO) { api.getFile(fileName, apiKey) }
             when (resp.body()?.state) {
                 "ACTIVE" -> return
-                "FAILED" -> throw IllegalStateException("الملف اترفض من الخدمة")
+                "FAILED" -> throw ProviderFailureException("الملف اترفض من الخدمة")
             }
             delay(3000)
         }
-        throw IllegalStateException("الملف لسه مش جاهز — جرّب تاني بعد شوية.")
+        throw ProviderFailureException("الملف لسه مش جاهز — جرّب تاني بعد شوية.")
     }
 
     // ---------------- تحويل النص إلى صوت ----------------
@@ -679,7 +684,7 @@ class GeminiRepository(private val context: Context) {
                 onStatus("Gemini مشغول دلوقتي — هنستنى شوية ونحاول تاني…")
                 delay(65_000)
                 generatePodcastScript(text, languageCode, apiKey)
-            } catch (e: ServerErrorException) {
+            } catch (e: ProviderFailureException) {
                 onStatus("الخدمة حصل فيها خطأ داخلي — هنستنى شوية ونحاول تاني…")
                 delay(65_000)
                 generatePodcastScript(text, languageCode, apiKey)
@@ -823,7 +828,7 @@ class GeminiRepository(private val context: Context) {
             } catch (e: RateLimitException) {
                 if (attempt >= 2) throw e
                 delay(65_000)
-            } catch (e: ServerErrorException) {
+            } catch (e: ProviderFailureException) {
                 if (attempt >= 2) throw e
                 delay(65_000)
             }
@@ -863,13 +868,24 @@ class GeminiRepository(private val context: Context) {
 
     // ---------------- المفاتيح الاحتياطية (التفريغ: Groq ثم Deepgram — الصوت: Azure ثم ElevenLabs ثم Cartesia) ----------------
 
+    /** اسم ملف آمن لرفع Groq — Whisper بيرفض الأسماء من غير امتداد صوتي معروف (زي mp4.339206). */
+    private fun safeAudioFileName(mimeType: String): String = when (mimeType) {
+        "audio/mpeg" -> "audio.mp3"
+        "audio/wav" -> "audio.wav"
+        "audio/ogg" -> "audio.ogg"
+        "audio/flac" -> "audio.flac"
+        "audio/aac" -> "audio.aac"
+        "video/mp4" -> "audio.mp4"
+        else -> "audio.m4a"
+    }
+
     private suspend fun transcribeWithGroq(file: File, mimeType: String, groqKey: String): String {
         if (file.length() > GROQ_MAX_FILE_BYTES) {
-            throw IllegalStateException("الجزء أكبر من 25 ميجا — Groq مش بيقبل ملفات أكبر من كده.")
+            throw ProviderFailureException("الجزء أكبر من 25 ميجا — Groq مش بيقبل ملفات أكبر من كده.")
         }
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
-            .addFormDataPart("file", file.name, file.asRequestBody(mimeType.toMediaType()))
+            .addFormDataPart("file", safeAudioFileName(mimeType), file.asRequestBody(mimeType.toMediaType()))
             .addFormDataPart("model", GROQ_STT_MODEL)
             .addFormDataPart("language", "ar")
             .addFormDataPart("response_format", "json")
@@ -920,9 +936,9 @@ class GeminiRepository(private val context: Context) {
         }
     }
 
-    /** فشل يستاهل التبديل للمزوّد اللي بعده: تجاوز حد أو ضغط أو انتهاء رصيد أو خطأ داخلي من السيرفر (500). */
+    /** فشل يستاهل التبديل للمزوّد اللي بعده: تجاوز حد أو ضغط أو انتهاء رصيد أو رفض المزوّد للطلب (400) أو خطأ داخلي من السيرفر (500). */
     private fun isFallbackFailure(e: Exception): Boolean =
-        e is RateLimitException || e is CreditExhaustedException || e is ServerErrorException
+        e is RateLimitException || e is CreditExhaustedException || e is ProviderFailureException
 
     /** ترتيب المزودين: المختار يدويًا أولاً، وبعده باقي المزودين المتاحين بالترتيب الافتراضي. */
     private fun orderedProviders(
@@ -945,7 +961,10 @@ class GeminiRepository(private val context: Context) {
         when (cause) {
             is ServiceOverloadedException -> "$fromName مشغول دلوقتي — بنكمّل مع $toName…"
             is CreditExhaustedException -> "رصيد $fromName خلص — بنكمّل مع $toName…"
-            is ServerErrorException -> "$fromName حصله خطأ داخلي — بنكمّل مع $toName…"
+            is ProviderFailureException -> when {
+                cause.message?.contains("25 ميجا") == true -> "الجزء أكبر من 25 ميجا — بنكمّل مع $toName…"
+                else -> "$fromName حصله خطأ — بنكمّل مع $toName…"
+            }
             else -> "ليمت $fromName خلص — بنكمّل مع $toName…"
         }
 
@@ -1123,7 +1142,7 @@ class GeminiRepository(private val context: Context) {
             } catch (e: RateLimitException) {
                 if (attempt >= 2) throw e
                 delay(65_000)
-            } catch (e: ServerErrorException) {
+            } catch (e: ProviderFailureException) {
                 if (attempt >= 2) throw e
                 delay(65_000)
             }

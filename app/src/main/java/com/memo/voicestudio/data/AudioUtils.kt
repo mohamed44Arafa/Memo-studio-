@@ -54,6 +54,38 @@ object AudioUtils {
         }
     }
 
+    /**
+     * يكشف نوع الملف من محتواه (مش من اسمه) — للملفات اللي اسمها غريب من غير امتداد معروف
+     * (زي mp4.339206). يرجع "video/mp4" لو فيه تراك فيديو، أو نوع الصوت حسب تراك الصوت،
+     * أو null لو مش قادر يحدد.
+     */
+    fun probeMimeType(file: File): String? {
+        return try {
+            val extractor = MediaExtractor()
+            extractor.setDataSource(file.absolutePath)
+            var hasVideo = false
+            var audioMime: String? = null
+            for (i in 0 until extractor.trackCount) {
+                val mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME) ?: ""
+                if (mime.startsWith("video/")) hasVideo = true
+                if (mime.startsWith("audio/") && audioMime == null) audioMime = mime
+            }
+            extractor.release()
+            when {
+                hasVideo -> "video/mp4"
+                audioMime == "audio/mp4a-latm" -> "audio/mp4"
+                audioMime == "audio/mpeg" -> "audio/mpeg"
+                audioMime == "audio/vorbis" || audioMime == "audio/opus" -> "audio/ogg"
+                audioMime == "audio/flac" -> "audio/flac"
+                audioMime == "audio/raw" -> "audio/wav"
+                audioMime != null -> "audio/mp4"
+                else -> null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun displayNameOf(context: Context, uri: Uri): String? {
         return try {
             context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
