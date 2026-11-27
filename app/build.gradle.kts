@@ -3,14 +3,18 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+import java.io.File
+import java.util.Base64
+
 // فك تشفير ملف التوقيع: الملف المحفوظ في الريبو نسخة base64 نصية من الـ keystore
 // (أدوات الرفع مبتقبلش ملفات ثنائية)، فإعدادات البناء تحوّلها لملف keystore
 // ثنائي في مجلد build قبل التوقيع — وده اللي بيتوقع بيه التطبيق فعلاً.
-// (باستخدام java.io.File العادي وrootDir/buildDir — من غير أي API إضافي.)
-val keystoreB64File = java.io.File(rootDir, "keystore/memo-voice-studio.keystore")
-val decodedKeystoreFile = java.io.File(buildDir, "keystore/memo-voice-studio.keystore")
+// (ملحوظة: لازم الـ import فوق — كتابة java.io.File كاملة من غير import
+//  مبتتقبلش في ملفات إعدادات جرادل، وده كان سبب فشل البناء.)
+val keystoreB64File = File(rootDir, "keystore/memo-voice-studio.keystore")
+val decodedKeystoreFile = File(buildDir, "keystore/memo-voice-studio.keystore")
 if (keystoreB64File.exists()) {
-    val decoded = java.util.Base64.getDecoder().decode(keystoreB64File.readText().trim())
+    val decoded = Base64.getDecoder().decode(keystoreB64File.readText().trim())
     if (!decodedKeystoreFile.exists() || !decodedKeystoreFile.readBytes().contentEquals(decoded)) {
         decodedKeystoreFile.parentFile.mkdirs()
         decodedKeystoreFile.writeBytes(decoded)
