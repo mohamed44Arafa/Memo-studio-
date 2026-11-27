@@ -304,6 +304,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     init {
+        // اختيار المزوّد اليدوي بيرجع "تلقائي" مع كل فتحة للتطبيق (طلب ميمو):
+        // لو اختار مزوّد معيّن وقفل البرنامج، لما يرجع يلاقيه تلقائي مش ثابت على اختياره.
+        if (transcriptionProvider != "auto" || voiceProvider != "auto") {
+            transcriptionProvider = "auto"
+            voiceProvider = "auto"
+            settings.transcriptionProvider = "auto"
+            settings.voiceProvider = "auto"
+        }
         // لو تفريغ خلص والتطبيق اتقفل واتفتح تاني، اعرض آخر نتيجة محفوظة.
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -387,7 +395,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         activeTransProvider = ""
         isTranscribing = true
         // التفريغ بيشتغل في فورجراوند سيرفس عشان يكمّل في الخلفية.
-        TranscriptionService.start(getApplication(), file, mimeType)
+        // لو السيرفس مقدرش يبدأ، نرجّع الحالة بدل ما الشاشة تفضل تلف على الفاضي.
+        try {
+            TranscriptionService.start(getApplication(), file, mimeType)
+        } catch (e: Exception) {
+            isTranscribing = false
+            transStatus = "مش قادر أشغّل التفريغ — جرّب تاني"
+        }
     }
 
     /** هل فيه ملف جاهز لإعادة التفريغ (نفس الملف من غير ما تختاره تاني). */
@@ -494,9 +508,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isSpeaking = true
                 hasGeneratedSpeech = true
                 // توليد الصوت بيشتغل في فورجراوند سيرفس عشان يكمّل في الخلفية.
-                TranscriptionService.startSpeech(
-                    getApplication(), inputFile, voiceName, languageCode(), style, gender
-                )
+                // لو السيرفس مقدرش يبدأ، نرجّع الحالة بدل ما الشاشة تفضل تلف على الفاضي.
+                try {
+                    TranscriptionService.startSpeech(
+                        getApplication(), inputFile, voiceName, languageCode(), style, gender
+                    )
+                } catch (e: Exception) {
+                    isSpeaking = false
+                    speakStatus = "مش قادر أشغّل توليد الصوت — جرّب تاني"
+                }
             }
         }
     }

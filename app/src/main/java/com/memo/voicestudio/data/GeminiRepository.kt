@@ -9,8 +9,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -22,8 +25,11 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 open class RateLimitException : Exception()
 
@@ -55,7 +61,7 @@ class GeminiRepository(private val context: Context) {
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(600, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(600, TimeUnit.SECONDS)
         .build()
 
@@ -65,6 +71,27 @@ class GeminiRepository(private val context: Context) {
         .addConverterFactory(GsonConverterFactory.create(gson))
         .build()
         .create(GeminiApi::class.java)
+
+    /**
+     * تنفيذ طلب OkHttp قابل للإلغاء فعلاً — لما المستخدم يدوس "إيقاف" أثناء
+     * التفريغ أو توليد الصوت، الطلب الشغال يتقطع فورًا بدل ما يستنى لحد ما
+     * يخلص (الـ execute() العادي بيستنى ومبيستجيبش للإلغاء، فزرار الإيقاف
+     * كان باين إنه مش شغال).
+     */
+    private suspend fun Call.executeCancellable(): okhttp3.Response =
+        suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { try { cancel() } catch (ignored: Exception) { } }
+            enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (cont.isCancelled) return
+                    cont.resumeWithException(e)
+                }
+
+                override fun onResponse(call: Call, response: okhttp3.Response) {
+                    cont.resume(response)
+                }
+            })
+        }
 
     companion object {
         const val TRANSCRIBE_MODEL = "gemini-3.5-transcribe"
@@ -204,7 +231,7 @@ class GeminiRepository(private val context: Context) {
         headers.forEach { (name, value) -> builder.addHeader(name, value) }
         return try {
             withContext(Dispatchers.IO) {
-                http.newCall(builder.build()).execute().use { resp ->
+                http.newCall(builder.build()).executeCancellable().use { resp ->
                     when {
                         resp.isSuccessful -> Result.success(Unit)
                         resp.code == 401 || resp.code == 403 -> Result.failure(IllegalStateException(badKeyMessage))
@@ -425,7 +452,7 @@ class GeminiRepository(private val context: Context) {
             .post(body)
             .build()
         return withContext(Dispatchers.IO) {
-            http.newCall(request).execute().use { resp ->
+            http.newCall(request).executeCancellable().use { resp ->
                 if (resp.code == 429) throw RateLimitException()
                 if (!resp.isSuccessful) {
                     throw IllegalStateException("فشل رفع الملف (${resp.code})")
@@ -532,6 +559,8 @@ class GeminiRepository(private val context: Context) {
             onProgress?.invoke("audio", 0, chunks.size)
             val completed = AtomicInteger(0)
             val parts = runParallelOrdered(chunks, 3) { chunk ->
+                // حالة حية مع كل مقطع بيبدأ — عشان الشاشة توري حركة مش رقم ثابت.
+                onStatus("بنولّد الصوت… خلص ${completed.get()} من ${chunks.size}")
                 val bytes = speakChunkWithChain(
                     chunk, voiceName, languageCode, style,
                     apiKey, azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey, gender,
@@ -647,6 +676,8 @@ class GeminiRepository(private val context: Context) {
             onProgress?.invoke("audio", 0, chunks.size)
             val completed = AtomicInteger(0)
             val parts = runParallelOrdered(chunks, 3) { chunk ->
+                // حالة حية مع كل مقطع بيبدأ — عشان الشاشة توري حركة مش رقم ثابت.
+                onStatus("بنولّد صوت البودكاست… خلص ${completed.get()} من ${chunks.size}")
                 val bytes = speakPodcastChunkWithChain(
                     chunk, languageCode, apiKey,
                     azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey,
@@ -829,7 +860,7 @@ class GeminiRepository(private val context: Context) {
             .post(body)
             .build()
         return withContext(Dispatchers.IO) {
-            http.newCall(request).execute().use { resp ->
+            http.newCall(request).executeCancellable().use { resp ->
                 if (resp.code == 429) throw RateLimitException()
                 if (resp.code == 503) throw ServiceOverloadedException()
                 if (!resp.isSuccessful) {
@@ -849,7 +880,7 @@ class GeminiRepository(private val context: Context) {
             .post(file.asRequestBody(mimeType.toMediaType()))
             .build()
         return withContext(Dispatchers.IO) {
-            http.newCall(request).execute().use { resp ->
+            http.newCall(request).executeCancellable().use { resp ->
                 if (resp.code == 429) throw RateLimitException()
                 if (resp.code == 503) throw ServiceOverloadedException()
                 if (resp.code == 401 || resp.code == 403) {
@@ -913,7 +944,7 @@ class GeminiRepository(private val context: Context) {
             .post(ssml.toRequestBody("application/ssml+xml".toMediaType()))
             .build()
         return withContext(Dispatchers.IO) {
-            http.newCall(request).execute().use { resp ->
+            http.newCall(request).executeCancellable().use { resp ->
                 if (resp.code == 429) throw RateLimitException()
                 if (resp.code == 503) throw ServiceOverloadedException()
                 if (!resp.isSuccessful) {
@@ -962,7 +993,7 @@ class GeminiRepository(private val context: Context) {
             .post(json.toRequestBody("application/json".toMediaType()))
             .build()
         return withContext(Dispatchers.IO) {
-            http.newCall(request).execute().use { resp ->
+            http.newCall(request).executeCancellable().use { resp ->
                 if (resp.code == 429) throw RateLimitException()
                 if (resp.code == 503) throw ServiceOverloadedException()
                 if (resp.code == 401 || resp.code == 403) {
@@ -1018,7 +1049,7 @@ class GeminiRepository(private val context: Context) {
             .post(json.toRequestBody("application/json".toMediaType()))
             .build()
         return withContext(Dispatchers.IO) {
-            http.newCall(request).execute().use { resp ->
+            http.newCall(request).executeCancellable().use { resp ->
                 if (resp.code == 429) throw RateLimitException()
                 if (resp.code == 503) throw ServiceOverloadedException()
                 if (resp.code == 401 || resp.code == 403) {
