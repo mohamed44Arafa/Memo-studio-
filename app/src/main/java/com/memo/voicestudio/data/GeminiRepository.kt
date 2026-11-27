@@ -456,6 +456,16 @@ class GeminiRepository(private val context: Context) {
         return if (detail.isBlank()) "" else ": ${detail.take(300)}"
     }
 
+    /** نفس الفكرة لردود OkHttp (Groq/Deepgram/Azure/ElevenLabs/Cartesia والرفع) — من غيرها رسالة الخطأ الحقيقية من الخدمة بتضيع. */
+    private fun okHttpErrorDetail(resp: okhttp3.Response): String {
+        val detail = try {
+            resp.body?.string()?.trim().orEmpty()
+        } catch (e: Exception) {
+            ""
+        }
+        return if (detail.isBlank()) "" else ": ${detail.take(300)}"
+    }
+
     private suspend fun uploadFile(file: File, mimeType: String, apiKey: String): String {
         val boundary = "memo-voice-${System.currentTimeMillis()}"
         val metadata = "{\"file\":{\"displayName\":\"${file.name}\"}}"
@@ -473,7 +483,7 @@ class GeminiRepository(private val context: Context) {
             http.newCall(request).executeCancellable().use { resp ->
                 if (resp.code == 429) throw RateLimitException()
                 if (!resp.isSuccessful) {
-                    throwServiceError("فشل رفع الملف", resp.code, "")
+                    throwServiceError("فشل رفع الملف", resp.code, okHttpErrorDetail(resp))
                 }
                 val parsed = gson.fromJson(resp.body?.string(), FileUploadResponse::class.java)
                 val name = parsed.file?.name
@@ -900,7 +910,7 @@ class GeminiRepository(private val context: Context) {
                 if (resp.code == 429) throw RateLimitException()
                 if (resp.code == 503) throw ServiceOverloadedException()
                 if (!resp.isSuccessful) {
-                    throwServiceError("خطأ من Groq", resp.code, "")
+                    throwServiceError("خطأ من Groq", resp.code, okHttpErrorDetail(resp))
                 }
                 val parsed = gson.fromJson(resp.body?.string(), GroqTranscriptionResponse::class.java)
                 parsed.text?.trim()?.takeIf { it.isNotEmpty() }
@@ -926,7 +936,7 @@ class GeminiRepository(private val context: Context) {
                     throw CreditExhaustedException("رصيد Deepgram خلص — الرصيد المجاني ٢٠٠ دولار مرة واحدة.")
                 }
                 if (!resp.isSuccessful) {
-                    throwServiceError("خطأ من Deepgram", resp.code, "")
+                    throwServiceError("خطأ من Deepgram", resp.code, okHttpErrorDetail(resp))
                 }
                 val parsed = gson.fromJson(resp.body?.string(), DeepgramTranscriptionResponse::class.java)
                 parsed.results?.channels?.firstOrNull()?.alternatives?.firstOrNull()?.transcript?.trim()
@@ -988,7 +998,7 @@ class GeminiRepository(private val context: Context) {
                 if (resp.code == 429) throw RateLimitException()
                 if (resp.code == 503) throw ServiceOverloadedException()
                 if (!resp.isSuccessful) {
-                    throwServiceError("خطأ من Azure", resp.code, "")
+                    throwServiceError("خطأ من Azure", resp.code, okHttpErrorDetail(resp))
                 }
                 resp.body?.bytes() ?: throw IllegalStateException("Azure رجّع صوت فاضي")
             }
@@ -1043,7 +1053,7 @@ class GeminiRepository(private val context: Context) {
                     throw CreditExhaustedException("رصيد ElevenLabs المجاني خلص — بييجي ١٠ آلاف نقطة جديدة كل شهر.")
                 }
                 if (!resp.isSuccessful) {
-                    throwServiceError("خطأ من ElevenLabs", resp.code, "")
+                    throwServiceError("خطأ من ElevenLabs", resp.code, okHttpErrorDetail(resp))
                 }
                 val bytes = resp.body?.bytes() ?: throw IllegalStateException("ElevenLabs رجّع صوت فاضي")
                 if (bytes.isEmpty()) throw IllegalStateException("ElevenLabs رجّع صوت فاضي")
@@ -1099,7 +1109,7 @@ class GeminiRepository(private val context: Context) {
                     throw CreditExhaustedException("رصيد Cartesia المجاني خلص — بييجي ٢٠ ألف نقطة جديدة كل شهر.")
                 }
                 if (!resp.isSuccessful) {
-                    throwServiceError("خطأ من Cartesia", resp.code, "")
+                    throwServiceError("خطأ من Cartesia", resp.code, okHttpErrorDetail(resp))
                 }
                 val bytes = resp.body?.bytes() ?: throw IllegalStateException("Cartesia رجّع صوت فاضي")
                 if (bytes.isEmpty()) throw IllegalStateException("Cartesia رجّع صوت فاضي")
