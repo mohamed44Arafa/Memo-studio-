@@ -6,11 +6,12 @@ plugins {
 // فك تشفير ملف التوقيع: الملف المحفوظ في الريبو نسخة base64 نصية من الـ keystore
 // (أدوات الرفع مبتقبلش ملفات ثنائية)، فإعدادات البناء تحوّلها لملف keystore
 // ثنائي في مجلد build قبل التوقيع — وده اللي بيتوقع بيه التطبيق فعلاً.
-val keystoreB64File = file("../keystore/memo-voice-studio.keystore")
-val decodedKeystoreFile = layout.buildDirectory.file("keystore/memo-voice-studio.keystore").get().asFile
+// (باستخدام java.io.File العادي وrootDir/buildDir — من غير أي API إضافي.)
+val keystoreB64File = java.io.File(rootDir, "keystore/memo-voice-studio.keystore")
+val decodedKeystoreFile = java.io.File(buildDir, "keystore/memo-voice-studio.keystore")
 if (keystoreB64File.exists()) {
     val decoded = java.util.Base64.getDecoder().decode(keystoreB64File.readText().trim())
-    if (!decodedKeystoreFile.exists() || decodedKeystoreFile.readBytes() != decoded) {
+    if (!decodedKeystoreFile.exists() || !decodedKeystoreFile.readBytes().contentEquals(decoded)) {
         decodedKeystoreFile.parentFile.mkdirs()
         decodedKeystoreFile.writeBytes(decoded)
     }
