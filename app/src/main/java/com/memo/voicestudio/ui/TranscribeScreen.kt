@@ -107,7 +107,27 @@ fun TranscribeScreen(viewModel: MainViewModel, onGoToSpeak: () -> Unit) {
 
         if (viewModel.transFileName.isNotBlank()) {
             Spacer(Modifier.height(16.dp))
-            Text("الملف: ${viewModel.transFileName}", fontSize = 16.sp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "الملف: ${viewModel.transFileName}",
+                    fontSize = 16.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedButton(
+                    onClick = {
+                        if (AudioUtils.mimeTypeFor(viewModel.transFileName).startsWith("video/")) {
+                            pickVideo.launch("video/*")
+                        } else {
+                            pickAudio.launch("audio/*")
+                        }
+                    },
+                    enabled = !viewModel.isTranscribing
+                ) { Text("تغيير الملف ↻", fontSize = 14.sp) }
+            }
         }
 
         if (pickError.isNotBlank()) {

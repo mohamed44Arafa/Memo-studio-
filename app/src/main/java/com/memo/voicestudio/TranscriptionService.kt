@@ -71,16 +71,70 @@ object TranscriptionStore {
 }
 
 /**
- * التفريغ في الخلفية (فورجراوند سيرفس من نوع dataSync):
- * بيشتغل بنفس pipeline التفريغ الموجود (استخراج الصوت + تقسيم 50 دقيقة +
- * Gemini مع بدائل Groq ثم Deepgram)، فالتفريغ يكمّل حتى لو المستخدم
- * خرج من التطبيق أو قفل الشاشة.
+ * حالة توليد الصوت/البودكاست الحالية — يقرأها الـ ViewModel عشان الشاشة
+ * توري التقدم أو الصوت الناتج لما المستخدم يرجع يفتح التطبيق.
+ */
+data class SpeechState(
+    val running: Boolean = false,
+    val kind: String = "", // "voice" أو "podcast"
+    val status: String = "",
+    val phase: String = "", // "script" (تجهيز الحوار) أو "audio" (توليد الصوت)
+    val currentChunk: Int = 0,
+    val totalChunks: Int = 0,
+    val audioPath: String = "",
+    val error: String? = null,
+    val provider: String = ""
+)
+
+/**
+ * حالة الصوت المشتركة بين السيرفس والواجهة، وآخر ملف صوت مولّد
+ * (بيتنسخ لاسم ثابت عشان يتلاقى للتشغيل بعد ما التطبيق يتقفل ويتفتح تاني).
+ */
+object SpeechStore {
+    const val LAST_AUDIO_FILE = "last-speech.wav"
+
+    private val _state = MutableStateFlow(SpeechState())
+    val state: StateFlow<SpeechState> = _state.asStateFlow()
+
+    fun update(transform: (SpeechState) -> SpeechState) {
+        _state.value = transform(_state.value)
+    }
+
+    fun saveAudio(context: Context, wav: File): File? {
+        return try {
+            val dest = File(context.cacheDir, LAST_AUDIO_FILE)
+            wav.copyTo(dest, overwrite = true)
+            dest
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun loadLastAudio(context: Context): File? {
+        return try {
+            val file = File(context.cacheDir, LAST_AUDIO_FILE)
+            if (file.exists() && file.length() > 0) file else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+}
+
+/**
+ * المهام الطويلة في الخلفية (فورجراوند سيرفس من نوع dataSync):
+ * مهمة واحدة في المرة — تفريغ أو توليد صوت/بودكاست — فتكمّل حتى لو
+ * المستخدم خرج من التطبيق أو قفل الشاشة.
+ * التفريغ بيشتغل بنفس pipeline الموجود (استخراج الصوت + تقسيم 50 دقيقة +
+ * Gemini مع بدائل Groq ثم Deepgram)، والصوت بيشتغل بنفس `synthesize()`
+ * (بودكاست أو عادي) مع نفس سلسلة بدائل الصوت.
  *
  * إشعار الفورجراوند سيرفس معفي من صلاحية POST_NOTIFICATIONS في
  * أندرويد 13+، فمش محتاجين نطلبها ولا نضيفها في الـ Manifest.
  * الملف بيتبعت للسيرفس كملف جوه cacheDir (الواجهة بتنسخ الملف المختار
  * هناك قبل ما تبدأ)، فمش محتاجين takePersistableUriPermission —
  * وده كمان مش متاح أصلًا مع GetContent، ده للـ OpenDocument بس.
+ * (الاسم التاريخي للكلاس "TranscriptionService" متساب زي ما هو عشان
+ * الـ Manifest والـ ViewModel بيشاوروا عليه، رغم إنه بقى يشغّل الصوت كمان.)
  */
 class TranscriptionService : Service() {
 
@@ -91,13 +145,42 @@ class TranscriptionService : Service() {
         private const val EXTRA_FILE_PATH = "file_path"
         private const val EXTRA_MIME_TYPE = "mime_type"
         private const val EXTRA_FILE_NAME = "file_name"
+        private const val EXTRA_JOB = "job"
+        private const val JOB_TRANSCRIPTION = "transcription"
+        private const val JOB_SPEECH = "speech"
+        private const val EXTRA_TEXT_PATH = "text_path"
+        private const val EXTRA_VOICE_NAME = "voice_name"
+        private const val EXTRA_LANGUAGE_CODE = "language_code"
+        private const val EXTRA_STYLE = "style"
+        private const val EXTRA_GENDER = "gender"
 
         /** يبدأ التفريغ في الخلفية — الملف لازم يكون جوه cacheDir. */
         fun start(context: Context, file: File, mimeType: String) {
             val intent = Intent(context, TranscriptionService::class.java).apply {
+                putExtra(EXTRA_JOB, JOB_TRANSCRIPTION)
                 putExtra(EXTRA_FILE_PATH, file.absolutePath)
                 putExtra(EXTRA_MIME_TYPE, mimeType)
                 putExtra(EXTRA_FILE_NAME, file.name)
+            }
+            context.startForegroundService(intent)
+        }
+
+        /** يبدأ توليد الصوت/البودكاست في الخلفية — النص بيتبعت كملف جوه cacheDir. */
+        fun startSpeech(
+            context: Context,
+            textFile: File,
+            voiceName: String,
+            languageCode: String,
+            style: String,
+            gender: String
+        ) {
+            val intent = Intent(context, TranscriptionService::class.java).apply {
+                putExtra(EXTRA_JOB, JOB_SPEECH)
+                putExtra(EXTRA_TEXT_PATH, textFile.absolutePath)
+                putExtra(EXTRA_VOICE_NAME, voiceName)
+                putExtra(EXTRA_LANGUAGE_CODE, languageCode)
+                putExtra(EXTRA_STYLE, style)
+                putExtra(EXTRA_GENDER, gender)
             }
             context.startForegroundService(intent)
         }
@@ -105,10 +188,16 @@ class TranscriptionService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var transcribeJob: Job? = null
+    private var speechJob: Job? = null
+    private var currentJobKind = JOB_TRANSCRIPTION
+    private var currentSpeechKind = "voice"
     private var currentFileName = ""
     private var currentStatus = "بنبدأ…"
     private var currentSegment = 0
     private var totalSegments = 0
+    private var currentPhase = ""
+    private var currentChunk = 0
+    private var totalChunks = 0
     private var isFinished = false
     private var finishedTitle = ""
     private var finishedText = ""
@@ -120,28 +209,54 @@ class TranscriptionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_CANCEL) {
-            cancelTranscription()
+            cancelCurrentJob()
             return START_NOT_STICKY
         }
-        // لو تفريغ شغال أصلاً، تجاهل الأمر الجديد (الواجهة بتمنع ده أصلاً).
-        if (transcribeJob?.isActive == true) return START_NOT_STICKY
+        // مهمة واحدة في المرة (تفريغ أو صوت) — لو مهمة شغالة، ارفض الجديدة
+        // (الواجهة بتمنع ده أصلاً وبتبيّن رسالة "في مهمة شغالة دلوقتي").
+        if (transcribeJob?.isActive == true || speechJob?.isActive == true) return START_NOT_STICKY
 
-        val path = intent?.getStringExtra(EXTRA_FILE_PATH) ?: return START_NOT_STICKY
-        val mimeType = intent.getStringExtra(EXTRA_MIME_TYPE) ?: "audio/mp4"
-        currentFileName = intent.getStringExtra(EXTRA_FILE_NAME) ?: File(path).name
-        currentStatus = "بنبدأ…"
-        currentSegment = 0
-        totalSegments = 0
-        isFinished = false
+        val job = intent?.getStringExtra(EXTRA_JOB) ?: JOB_TRANSCRIPTION
+        if (job == JOB_SPEECH) {
+            val path = intent?.getStringExtra(EXTRA_TEXT_PATH) ?: return START_NOT_STICKY
+            val voiceName = intent.getStringExtra(EXTRA_VOICE_NAME) ?: "Kore"
+            val languageCode = intent.getStringExtra(EXTRA_LANGUAGE_CODE) ?: "ar-EG"
+            val style = intent.getStringExtra(EXTRA_STYLE) ?: "normal"
+            val gender = intent.getStringExtra(EXTRA_GENDER) ?: "female"
+            currentJobKind = JOB_SPEECH
+            currentSpeechKind = if (style == "podcast") "podcast" else "voice"
+            currentStatus = "بنبدأ…"
+            currentPhase = ""
+            currentChunk = 0
+            totalChunks = 0
+            isFinished = false
 
-        // لازم startForeground فورًا (قبل أي شغل شبكة) وإلا النظام يوقف السيرفس.
-        startForeground(NOTIFICATION_ID, buildNotification())
-        TranscriptionStore.update {
-            TranscriptionState(running = true, fileName = currentFileName, status = "بنبدأ…")
-        }
+            // لازم startForeground فورًا (قبل أي شغل شبكة) وإلا النظام يوقف السيرفس.
+            startForeground(NOTIFICATION_ID, buildNotification())
+            SpeechStore.update {
+                SpeechState(running = true, kind = currentSpeechKind, status = "بنبدأ…")
+            }
+            speechJob = serviceScope.launch {
+                runSpeech(File(path), voiceName, languageCode, style, gender)
+            }
+        } else {
+            val path = intent?.getStringExtra(EXTRA_FILE_PATH) ?: return START_NOT_STICKY
+            val mimeType = intent.getStringExtra(EXTRA_MIME_TYPE) ?: "audio/mp4"
+            currentJobKind = JOB_TRANSCRIPTION
+            currentFileName = intent.getStringExtra(EXTRA_FILE_NAME) ?: File(path).name
+            currentStatus = "بنبدأ…"
+            currentSegment = 0
+            totalSegments = 0
+            isFinished = false
 
-        transcribeJob = serviceScope.launch {
-            runTranscription(File(path), mimeType)
+            // لازم startForeground فورًا (قبل أي شغل شبكة) وإلا النظام يوقف السيرفس.
+            startForeground(NOTIFICATION_ID, buildNotification())
+            TranscriptionStore.update {
+                TranscriptionState(running = true, fileName = currentFileName, status = "بنبدأ…")
+            }
+            transcribeJob = serviceScope.launch {
+                runTranscription(File(path), mimeType)
+            }
         }
         return START_NOT_STICKY
     }
@@ -200,11 +315,89 @@ class TranscriptionService : Service() {
         stopSelf()
     }
 
-    /** يوقف التفريغ والسيرفس (من زر "إلغاء" في الإشعار). */
-    private fun cancelTranscription() {
+    /** توليد الصوت/البودكاست في الخلفية بنفس `synthesize()` (نفس سلسلة بدائل الصوت). */
+    private suspend fun runSpeech(inputFile: File, voiceName: String, languageCode: String, style: String, gender: String) {
+        // المفاتيح واختيار المزود اليدوي بيتقروا من الإعدادات هنا، مش بيتبعتوا في الـ Intent.
+        val settings = SettingsStore(applicationContext)
+        val repo = GeminiRepository(applicationContext)
+        val kind = currentSpeechKind
+        val text = try {
+            inputFile.readText()
+        } catch (e: Exception) {
+            ""
+        }
+        try {
+            val result = repo.synthesize(
+                text, voiceName, languageCode, style, settings.apiKey.trim(),
+                onStatus = { status ->
+                    currentStatus = status
+                    SpeechStore.update { it.copy(status = status) }
+                    updateNotification()
+                },
+                azureApiKey = settings.azureApiKey.trim(),
+                azureRegion = settings.azureRegion.trim(),
+                elevenLabsApiKey = settings.elevenLabsApiKey.trim(),
+                cartesiaApiKey = settings.cartesiaApiKey.trim(),
+                gender = gender,
+                voiceProvider = settings.voiceProvider,
+                onProvider = { p ->
+                    SpeechStore.update { it.copy(provider = p) }
+                },
+                onProgress = { phase, current, total ->
+                    currentPhase = phase
+                    currentChunk = current
+                    totalChunks = total
+                    SpeechStore.update { it.copy(phase = phase, currentChunk = current, totalChunks = total) }
+                    updateNotification()
+                }
+            )
+            result
+                .onSuccess { wav ->
+                    val saved = SpeechStore.saveAudio(applicationContext, wav)
+                    val doneStatus = if (kind == "podcast") "خلص البودكاست ✔" else "خلص الصوت ✔"
+                    SpeechStore.update {
+                        it.copy(
+                            running = false, status = doneStatus,
+                            audioPath = saved?.absolutePath ?: wav.absolutePath
+                        )
+                    }
+                    finishWithNotification(
+                        if (kind == "podcast") "اكتمل البودكاست ✔" else "اكتمل الصوت ✔",
+                        "اضغط لتشغيل الصوت"
+                    )
+                    delay(3000)
+                }
+                .onFailure { error ->
+                    val msg = error.message ?: "حصل خطأ"
+                    SpeechStore.update { it.copy(running = false, status = msg, error = msg) }
+                    finishWithNotification("توليد الصوت وقف", msg)
+                    delay(3000)
+                }
+        } catch (e: CancellationException) {
+            // الإلغاء من زر "إلغاء" — من غير إشعار، السيرفس بيقف على طول.
+            SpeechStore.update {
+                SpeechState(running = false, kind = kind, status = "اتلغى توليد الصوت")
+            }
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
+        }
+        // الإشعار النهائي اتعرض 3 ثواني — السيرفس بيقف والإشعار بيختفي معاه.
+        stopSelf()
+    }
+
+    /** يوقف المهمة الشغالة (تفريغ أو صوت) والسيرفس (من زر "إلغاء" في الإشعار). */
+    private fun cancelCurrentJob() {
         transcribeJob?.cancel()
-        TranscriptionStore.update {
-            TranscriptionState(running = false, fileName = currentFileName, status = "اتلغى التفريغ")
+        speechJob?.cancel()
+        if (currentJobKind == JOB_SPEECH) {
+            SpeechStore.update {
+                SpeechState(running = false, kind = currentSpeechKind, status = "اتلغى توليد الصوت")
+            }
+        } else {
+            TranscriptionStore.update {
+                TranscriptionState(running = false, fileName = currentFileName, status = "اتلغى التفريغ")
+            }
         }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -241,16 +434,30 @@ class TranscriptionService : Service() {
                 .setOngoing(false)
                 .setProgress(0, 0, false)
         } else {
-            builder
-                .setContentTitle("جارٍ تفريغ: $currentFileName")
-                .setContentText(notificationProgressText())
-                .setOngoing(true)
-            if (totalSegments > 1) {
-                // شريط التقدم حسب الأجزاء اللي خلصت (الجزء الحالي لسه شغال).
-                builder.setProgress(totalSegments, (currentSegment - 1).coerceAtLeast(0), false)
+            if (currentJobKind == JOB_SPEECH) {
+                builder
+                    .setContentTitle(if (currentSpeechKind == "podcast") "جارٍ توليد البودكاست…" else "جارٍ توليد الصوت…")
+                    .setContentText(speechProgressText())
+                    .setOngoing(true)
+                if (currentPhase == "audio" && totalChunks > 1) {
+                    // شريط التقدم حسب المقاطع اللي خلصت (المقطع الحالي لسه شغال).
+                    builder.setProgress(totalChunks, (currentChunk - 1).coerceAtLeast(0), false)
+                } else {
+                    // لسه بنجهّز الحوار، أو الصوت مقطع واحد — تقدّم غير محدد.
+                    builder.setProgress(0, 0, true)
+                }
             } else {
-                // لسه بنستخرج الصوت أو بنقسّم، أو الملف جزء واحد — تقدّم غير محدد.
-                builder.setProgress(0, 0, true)
+                builder
+                    .setContentTitle("جارٍ تفريغ: $currentFileName")
+                    .setContentText(notificationProgressText())
+                    .setOngoing(true)
+                if (totalSegments > 1) {
+                    // شريط التقدم حسب الأجزاء اللي خلصت (الجزء الحالي لسه شغال).
+                    builder.setProgress(totalSegments, (currentSegment - 1).coerceAtLeast(0), false)
+                } else {
+                    // لسه بنستخرج الصوت أو بنقسّم، أو الملف جزء واحد — تقدّم غير محدد.
+                    builder.setProgress(0, 0, true)
+                }
             }
             val cancelIntent = PendingIntent.getService(
                 this, 0,
@@ -271,13 +478,23 @@ class TranscriptionService : Service() {
         return currentStatus
     }
 
+    /** نص تقدّم الصوت/البودكاست: مرحلة تجهيز الحوار، أو "المقطع X من Y — Z%". */
+    private fun speechProgressText(): String {
+        if (currentPhase == "script") return "تجهيز الحوار…"
+        if (totalChunks > 0 && currentChunk > 0) {
+            val percent = (currentChunk - 1) * 100 / totalChunks
+            return "المقطع $currentChunk من $totalChunks — $percent%"
+        }
+        return currentStatus
+    }
+
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "التفريغ في الخلفية",
+            "المهام في الخلفية",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "إشعارات تقدم تفريغ الصوت والفيديو أثناء عمل التطبيق في الخلفية"
+            description = "إشعارات تقدم التفريغ وتوليد الصوت أثناء عمل التطبيق في الخلفية"
         }
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(channel)
@@ -287,6 +504,7 @@ class TranscriptionService : Service() {
 
     override fun onDestroy() {
         transcribeJob?.cancel()
+        speechJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()
     }

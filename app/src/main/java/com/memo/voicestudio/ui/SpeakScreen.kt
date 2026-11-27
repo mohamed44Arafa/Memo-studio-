@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.memo.voicestudio.data.AudioUtils
+import com.memo.voicestudio.data.DocxText
 import com.memo.voicestudio.data.GeminiRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -113,9 +114,22 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                         viewModel.speakText = text
                     }
                 }
+                mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> {
+                    // ملف وورد: النص بيستخرج محليًا وبسرعة من غير أي طلبات شبكة.
+                    val text = context.contentResolver.openInputStream(uri)?.use { input ->
+                        DocxText.extractText(input)
+                    } ?: ""
+                    withContext(Dispatchers.Main) {
+                        if (text.isBlank()) {
+                            viewModel.setSpeakStatusMessage("مش قادر أقرأ نص من ملف الوورد ده")
+                        } else {
+                            viewModel.speakText = text
+                        }
+                    }
+                }
                 else -> {
                     withContext(Dispatchers.Main) {
-                        viewModel.setSpeakStatusMessage("نوع الملف ده مش مدعوم — اختار TXT أو PDF")
+                        viewModel.setSpeakStatusMessage("نوع الملف ده مش مدعوم — اختار TXT أو PDF أو Word")
                     }
                 }
             }
@@ -151,7 +165,7 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
             OutlinedButton(
                 onClick = { pickFile.launch("*/*") },
                 modifier = Modifier.weight(1f).height(52.dp)
-            ) { Text("من ملف TXT/PDF", fontSize = 14.sp) }
+            ) { Text("من ملف TXT/PDF/Word", fontSize = 14.sp) }
             OutlinedButton(
                 onClick = { pickImage.launch("image/*") },
                 modifier = Modifier.weight(1f).height(52.dp)
@@ -271,6 +285,17 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
             Spacer(Modifier.height(16.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator()
+            }
+            if (viewModel.isSpeaking) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    when {
+                        viewModel.speakPhase == "script" -> "تجهيز الحوار…"
+                        viewModel.speakChunkTotal > 0 -> "المقطع ${viewModel.speakChunkCurrent} من ${viewModel.speakChunkTotal}"
+                        else -> viewModel.speakStatus
+                    },
+                    fontSize = 16.sp
+                )
             }
         }
 

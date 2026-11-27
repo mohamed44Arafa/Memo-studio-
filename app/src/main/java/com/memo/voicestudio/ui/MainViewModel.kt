@@ -16,10 +16,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.memo.voicestudio.TranscriptionService
 import com.memo.voicestudio.TranscriptionStore
+import com.memo.voicestudio.SpeechStore
 import com.memo.voicestudio.data.GeminiRepository
 import com.memo.voicestudio.data.PdfText
 import com.memo.voicestudio.data.SettingsStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -320,6 +324,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+        // لو صوت اتولد والتطبيق اتقفل واتفتح تاني، اعرض آخر ملف صوت محفوظ.
+        viewModelScope.launch(Dispatchers.IO) {
+            val lastAudio = SpeechStore.loadLastAudio(getApplication())
+            if (lastAudio != null && !SpeechStore.state.value.running) {
+                withContext(Dispatchers.Main) {
+                    audioFile = lastAudio
+                    speakStatus = "الصوت جاهز ✔ — اضغط تشغيل"
+                }
+            }
+        }
+        // تابع حالة توليد الصوت اللي شغال في الخلفية — الشاشة توري التقدم
+        // الحالي بدل ما تبدأ من جديد لما المستخدم يرجع.
+        viewModelScope.launch {
+            SpeechStore.state.collect { state ->
+                isSpeaking = state.running
+                if (state.status.isNotBlank()) speakStatus = state.status
+                speakPhase = state.phase
+                speakChunkCurrent = state.currentChunk
+                speakChunkTotal = state.totalChunks
+                if (state.provider.isNotBlank()) activeVoiceProvider = state.provider
+                if (state.audioPath.isNotBlank()) {
+                    audioFile = File(state.audioPath)
+                }
+            }
+        }
     }
 
     fun transcribe(file: File, mimeType: String) {
@@ -352,6 +381,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var isSpeaking by mutableStateOf(false)
         private set
+    /** مرحلة توليد الصوت في الخلفية: "script" أو "audio" — للعرض في الشاشة. */
+    var speakPhase by mutableStateOf("")
+        private set
+    /** المقطع الحالي من إجمالي مقاطع الصوت — للعرض في الشاشة. */
+    var speakChunkCurrent by mutableStateOf(0)
+        private set
+    var speakChunkTotal by mutableStateOf(0)
+        private set
     var audioFile by mutableStateOf<File?>(null)
         private set
     var isPlaying by mutableStateOf(false)
@@ -361,32 +398,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun speak() {
         val text = speakText.trim()
+        if (text.isBlank()) {
+            speakStatus = "مفيش نص — اكتب نص أو استخرجه من ملف أو صورة أولاً."
+            return
+        }
+        // مهمة واحدة في المرة (تفريغ أو صوت) — لو مهمة شغالة، ارفض الجديدة.
+        if (TranscriptionStore.state.value.running || SpeechStore.state.value.running) {
+            speakStatus = "في مهمة شغالة دلوقتي — استنى لحد ما تخلص"
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
-            isSpeaking = true
-            activeVoiceProvider = ""
-            speakStatus = "بنجهّز الصوت…"
-            audioFile = null
-            val result = repo.synthesize(
-                text, voiceName, languageCode(), style, apiKey.trim(),
-                onStatus = { status -> speakStatus = status },
-                azureApiKey = azureApiKey.trim(),
-                azureRegion = azureRegion.trim(),
-                elevenLabsApiKey = elevenLabsApiKey.trim(),
-                cartesiaApiKey = cartesiaApiKey.trim(),
-                gender = gender,
-                voiceProvider = voiceProvider,
-                onProvider = { p -> activeVoiceProvider = p }
-            )
+            // النص بيتبعت للسيرفس كملف عشان مفيش حد لحجم الـ Intent.
+            val inputFile = File(getApplication<Application>().cacheDir, "speech-input.txt")
+            try {
+                inputFile.writeText(text)
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { speakStatus = "مش قادر أجهّز النص" }
+                return@launch
+            }
             withContext(Dispatchers.Main) {
-                isSpeaking = false
-                result
-                    .onSuccess {
-                        audioFile = it
-                        speakStatus = "الصوت جاهز ✔ — اضغط تشغيل"
-                    }
-                    .onFailure {
-                        speakStatus = it.message ?: "حصل خطأ"
-                    }
+                // فحص تاني قبل التشغيل (ممكن مهمة تكون بدأت أثناء تجهيز الملف).
+                if (TranscriptionStore.state.value.running || SpeechStore.state.value.running) {
+                    speakStatus = "في مهمة شغالة دلوقتي — استنى لحد ما تخلص"
+                    return@withContext
+                }
+                audioFile = null
+                activeVoiceProvider = ""
+                speakStatus = "بنبدأ…"
+                speakPhase = ""
+                speakChunkCurrent = 0
+                speakChunkTotal = 0
+                isSpeaking = true
+                // توليد الصوت بيشتغل في فورجراوند سيرفس عشان يكمّل في الخلفية.
+                TranscriptionService.startSpeech(
+                    getApplication(), inputFile, voiceName, languageCode(), style, gender
+                )
             }
         }
     }
@@ -443,15 +489,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 return@launch
             }
-            // PDF مصوّر (سكانر): نقرأ الصفحات كصور
+            // PDF مصوّر (سكانر): نقرأ الصفحات كصور — 3 صفحات في نفس الوقت
+            // (كل صفحة مستقلة، والنتيجة بتتجمع بنفس ترتيب الصفحات).
+            // renderPageToBitmap بيفتح ملف جديد لكل صفحة، فالتوازي آمن.
             val pages = PdfText.pageCount(file)
-            val out = StringBuilder()
             val maxPages = minOf(pages, 10)
-            for (page in 0 until maxPages) {
-                speakStatus = "بنقرأ صفحة ${page + 1} من $maxPages كصورة…"
-                val bitmap = PdfText.renderPageToBitmap(file, page) ?: continue
-                repo.ocrImage(bitmap, apiKey.trim())
-                    .onSuccess { out.append(it).append("\n") }
+            val pageTexts = arrayOfNulls<String>(maxPages)
+            speakStatus = "بنقرأ صفحات PDF كصور…"
+            for (window in (0 until maxPages).chunked(3)) {
+                coroutineScope {
+                    window.map { page ->
+                        async {
+                            val bitmap = PdfText.renderPageToBitmap(file, page) ?: return@async
+                            repo.ocrImage(bitmap, apiKey.trim()) { speakStatus = it }
+                                .onSuccess { if (it.isNotBlank()) pageTexts[page] = it }
+                        }
+                    }.awaitAll()
+                }
+            }
+            val out = StringBuilder()
+            for (pageText in pageTexts) {
+                if (pageText != null) out.append(pageText).append("\n")
             }
             withContext(Dispatchers.Main) {
                 isExtracting = false
@@ -469,7 +527,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             isExtracting = true
             speakStatus = "بنقرأ النص من الصورة…"
-            val result = repo.ocrImage(bitmap, apiKey.trim())
+            val result = repo.ocrImage(bitmap, apiKey.trim()) { speakStatus = it }
             withContext(Dispatchers.Main) {
                 isExtracting = false
                 result

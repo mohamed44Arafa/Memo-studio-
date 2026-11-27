@@ -47,6 +47,7 @@ object AudioUtils {
             "aac" -> "audio/aac"
             "txt" -> "text/plain"
             "pdf" -> "application/pdf"
+            "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             "jpg", "jpeg" -> "image/jpeg"
             "png" -> "image/png"
             else -> "application/octet-stream"

@@ -5,6 +5,9 @@ import android.graphics.Bitmap
 import android.util.Base64
 import com.google.gson.Gson
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +23,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 open class RateLimitException : Exception()
 
@@ -448,6 +452,28 @@ class GeminiRepository(private val context: Context) {
 
     // ---------------- تحويل النص إلى صوت ----------------
 
+    /**
+     * يشغّل مهمة لكل عنصر بشكل متوازي (3 كحد أقصى في نفس الوقت — احترامًا للحد المجاني)
+     * مع الحفاظ على ترتيب النتائج زي ترتيب العناصر الأصلية.
+     * لو أي مهمة فشلت، باقي مهام نفس الدفعة بتتلغي والخطأ بيطلع زي السلوك المتتابع.
+     */
+    private suspend fun <T, R> runParallelOrdered(
+        items: List<T>,
+        maxParallel: Int,
+        block: suspend (T) -> R
+    ): List<R> {
+        val results = arrayOfNulls<Any?>(items.size)
+        for (window in items.withIndex().chunked(maxParallel)) {
+            coroutineScope {
+                window.map { (index, item) ->
+                    async { results[index] = block(item) }
+                }.awaitAll()
+            }
+        }
+        @Suppress("UNCHECKED_CAST")
+        return results.map { it as R }
+    }
+
     suspend fun synthesize(
         text: String,
         voiceName: String,
@@ -463,7 +489,10 @@ class GeminiRepository(private val context: Context) {
         // المزود المختار يدويًا من الإعدادات ("auto" أو اسم مزود) — يتجرب الأول.
         voiceProvider: String = "auto",
         // المزوّد اللي شغال دلوقتي — للعرض في الواجهة.
-        onProvider: ((String) -> Unit)? = null
+        onProvider: ((String) -> Unit)? = null,
+        // تقدّم التوليد: المرحلة ("script" لتجهيز الحوار أو "audio" لتوليد الصوت)
+        // والمقطع الحالي من إجمالي المقاطع — للسيرفس والإشعار.
+        onProgress: ((phase: String, current: Int, total: Int) -> Unit)? = null
     ): Result<File> {
         val voiceOrder = orderedProviders(
             voiceProvider,
@@ -492,21 +521,27 @@ class GeminiRepository(private val context: Context) {
             return generatePodcast(
                 text, languageCode, apiKey, onStatus,
                 azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey,
-                voiceOrder, onProvider
+                voiceOrder, onProvider, onProgress
             )
         }
         return try {
             val chunks = splitTextForTts(text, style)
-            val pcm = ByteArrayOutputStream()
-            for ((i, chunk) in chunks.withIndex()) {
-                onStatus("بنولّد الصوت… جزء ${i + 1} من ${chunks.size}")
+            // المقاطع بتتولد 3 في نفس الوقت (بدل واحد ورا التاني) — أسرع بكتير للنصوص الطويلة،
+            // والنتيجة بتتجمع بنفس ترتيب النص الأصلي.
+            onStatus("بنولّد الصوت… ${chunks.size} أجزاء")
+            onProgress?.invoke("audio", 0, chunks.size)
+            val completed = AtomicInteger(0)
+            val parts = runParallelOrdered(chunks, 3) { chunk ->
                 val bytes = speakChunkWithChain(
                     chunk, voiceName, languageCode, style,
                     apiKey, azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey, gender,
                     voiceOrder, onStatus, onProvider
                 )
-                pcm.write(bytes)
+                onProgress?.invoke("audio", completed.incrementAndGet(), chunks.size)
+                bytes
             }
+            val pcm = ByteArrayOutputStream()
+            parts.forEach { pcm.write(it) }
             val wav = File(context.cacheDir, "voice_${System.currentTimeMillis()}.wav")
             wav.writeBytes(AudioUtils.pcmToWav(pcm.toByteArray(), 24000))
             Result.success(wav)
@@ -520,6 +555,8 @@ class GeminiRepository(private val context: Context) {
             }
             Result.failure(IllegalStateException(msg))
         } catch (e: Exception) {
+            // الإلغاء مش خطأ — لازم يعدّي زي ما هو عشان السيرفس يوقف من غير رسالة خطأ.
+            if (e is CancellationException) throw e
             Result.failure(
                 IllegalStateException("حصلت مشكلة أثناء توليد الصوت: ${e.message ?: "خطأ غير معروف"}")
             )
@@ -588,10 +625,12 @@ class GeminiRepository(private val context: Context) {
         elevenLabsApiKey: String = "",
         cartesiaApiKey: String = "",
         voiceOrder: List<String>,
-        onProvider: ((String) -> Unit)? = null
+        onProvider: ((String) -> Unit)? = null,
+        onProgress: ((phase: String, current: Int, total: Int) -> Unit)? = null
     ): Result<File> {
         return try {
             onStatus("بنحوّل النص لحوار بودكاست…")
+            onProgress?.invoke("script", 0, 0)
             val script = try {
                 generatePodcastScript(text, languageCode, apiKey)
             } catch (e: ServiceOverloadedException) {
@@ -603,16 +642,21 @@ class GeminiRepository(private val context: Context) {
             if (chunks.isEmpty()) {
                 throw IllegalStateException("مقدرناش نحوّل النص لحوار — جرّب نص أقصر أو أوضح.")
             }
-            val pcm = ByteArrayOutputStream()
-            for ((i, chunk) in chunks.withIndex()) {
-                onStatus("بنولّد صوت البودكاست… جزء ${i + 1} من ${chunks.size}")
+            // مقاطع البودكاست بتتولد 3 في نفس الوقت — والنتيجة بتتجمع بنفس ترتيب الحوار.
+            onStatus("بنولّد صوت البودكاست… ${chunks.size} أجزاء")
+            onProgress?.invoke("audio", 0, chunks.size)
+            val completed = AtomicInteger(0)
+            val parts = runParallelOrdered(chunks, 3) { chunk ->
                 val bytes = speakPodcastChunkWithChain(
                     chunk, languageCode, apiKey,
                     azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey,
                     voiceOrder, onStatus, onProvider
                 )
-                pcm.write(bytes)
+                onProgress?.invoke("audio", completed.incrementAndGet(), chunks.size)
+                bytes
             }
+            val pcm = ByteArrayOutputStream()
+            parts.forEach { pcm.write(it) }
             val wav = File(context.cacheDir, "podcast_${System.currentTimeMillis()}.wav")
             wav.writeBytes(AudioUtils.pcmToWav(pcm.toByteArray(), 24000))
             Result.success(wav)
@@ -626,6 +670,8 @@ class GeminiRepository(private val context: Context) {
             }
             Result.failure(IllegalStateException(msg))
         } catch (e: Exception) {
+            // الإلغاء مش خطأ — لازم يعدّي زي ما هو عشان السيرفس يوقف من غير رسالة خطأ.
+            if (e is CancellationException) throw e
             Result.failure(
                 IllegalStateException("حصلت مشكلة أثناء توليد البودكاست: ${e.message ?: "خطأ غير معروف"}")
             )
@@ -1036,7 +1082,7 @@ class GeminiRepository(private val context: Context) {
         style: String,
         apiKey: String
     ): ByteArray {
-        val fullText = stylePrefix(style) + chunk
+        val fullText = stylePrefix(style, languageCode) + chunk
         val body = GenerateRequest(
             contents = listOf(Content(parts = listOf(Part(text = fullText)))),
             generationConfig = GenerationConfig(
@@ -1061,10 +1107,26 @@ class GeminiRepository(private val context: Context) {
         return Base64.decode(data, Base64.DEFAULT)
     }
 
-    private fun stylePrefix(style: String): String = when (style) {
-        "poetry" -> "اقرأ الأبيات التالية بإلقاء شعري بطيء وواضح، مع وقفة قصيرة بعد كل بيت:\n"
-        "story" -> "اقرأ النص التالي بأسلوب سرد قصصي مشوق، مع وقفات قصيرة بعد كل جملة ونبرة أعلى عند الأسئلة:\n"
-        else -> ""
+    /**
+     * توجيه نطق واضح بيتحط قبل كل مقطع، حسب اللهجة والستايل المختار —
+     * بيخلي الصوت طبيعي وواضح بدل القراءة الآلية الجامدة.
+     */
+    private fun stylePrefix(style: String, languageCode: String): String {
+        val egyptian = languageCode == "ar-EG"
+        return when (style) {
+            "poetry" -> if (egyptian)
+                "ألقِ الأبيات التالية باللهجة المصرية بإلقاء شعري بطيء وواضح، مع وقفة قصيرة بعد كل بيت:\n"
+            else
+                "ألقِ الأبيات التالية باللغة العربية الفصحى بإلقاء شعري بطيء وواضح، مع وقفة قصيرة بعد كل بيت:\n"
+            "story" -> if (egyptian)
+                "احكِ النص التالي باللهجة المصرية بأسلوب سرد قصصي مشوق، مع وقفات قصيرة بعد كل جملة ونبرة أعلى عند الأسئلة:\n"
+            else
+                "اقرأ النص التالي باللغة العربية الفصحى بأسلوب سرد قصصي مشوق، مع وقفات قصيرة بعد كل جملة ونبرة أعلى عند الأسئلة:\n"
+            else -> if (egyptian)
+                "اقرأ النص التالي بصوت طبيعي واضح باللهجة المصرية، بنبرة هادئة ومخارج حروف سليمة:\n"
+            else
+                "اقرأ النص التالي باللغة العربية الفصحى بصوت واضح وطبيعي، بنبرة هادئة ومخارج حروف سليمة:\n"
+        }
     }
 
     fun splitTextForTts(text: String, style: String): List<String> {
@@ -1090,42 +1152,66 @@ class GeminiRepository(private val context: Context) {
 
     // ---------------- قراءة نص من صورة ----------------
 
-    suspend fun ocrImage(bitmap: Bitmap, apiKey: String): Result<String> {
+    suspend fun ocrImage(
+        bitmap: Bitmap,
+        apiKey: String,
+        onStatus: ((String) -> Unit)? = null
+    ): Result<String> {
         if (apiKey.isBlank()) {
             return Result.failure(IllegalStateException("لا يوجد مفتاح — أدخل مفتاح Gemini من الإعدادات أولاً."))
         }
         return try {
-            val targetWidth = minOf(bitmap.width, 1600)
-            val targetHeight = (targetWidth.toFloat() / bitmap.width * bitmap.height).toInt().coerceAtLeast(1)
-            val scaled = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
-            val stream = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, 85, stream)
-            val b64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
-            val body = GenerateRequest(
-                contents = listOf(
-                    Content(
-                        parts = listOf(
-                            Part(inlineData = InlineData("image/jpeg", b64)),
-                            Part(text = "استخرج كل النص العربي الموجود في الصورة حرفيًا كما هو، دون تلخيص أو إضافة أو ترجمة.")
-                        )
+            val text = try {
+                ocrImageOnce(bitmap, apiKey)
+            } catch (e: ServiceOverloadedException) {
+                // موديل الرؤية مفيهوش مزود بديل — نعيد المحاولة مرة واحدة بعد 65 ثانية (نفس نمط البودكاست).
+                onStatus?.invoke("Gemini مشغول دلوقتي — هنستنى شوية ونحاول تاني…")
+                delay(65_000)
+                ocrImageOnce(bitmap, apiKey)
+            }
+            Result.success(text.trim())
+        } catch (e: RateLimitException) {
+            val msg = if (e is ServiceOverloadedException) {
+                "Gemini مشغول دلوقتي من كتر الطلب — استنى شوية وجرّب تاني."
+            } else {
+                "وصلت للحد المجاني — جرّب تاني بعد شوية."
+            }
+            Result.failure(IllegalStateException(msg))
+        } catch (e: Exception) {
+            // الإلغاء مش خطأ — لازم يعدّي زي ما هو عشان مفيش رسالة خطأ وهمية.
+            if (e is CancellationException) throw e
+            Result.failure(IllegalStateException("مش قادر أقرأ الصورة: ${e.message ?: ""}"))
+        }
+    }
+
+    /** قراءة نص من صورة — محاولة واحدة. 429 → حد مجاني، 503 → ضغط على الخدمة. */
+    private suspend fun ocrImageOnce(bitmap: Bitmap, apiKey: String): String {
+        val targetWidth = minOf(bitmap.width, 2048)
+        val targetHeight = (targetWidth.toFloat() / bitmap.width * bitmap.height).toInt().coerceAtLeast(1)
+        val scaled = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+        val stream = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, 85, stream)
+        val b64 = Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+        val body = GenerateRequest(
+            contents = listOf(
+                Content(
+                    parts = listOf(
+                        Part(inlineData = InlineData("image/jpeg", b64)),
+                        Part(text = "استخرج كل النص العربي الموجود في الصورة حرفيًا كما هو، دون تلخيص أو إضافة أو ترجمة.")
                     )
                 )
             )
-            val resp = withContext(Dispatchers.IO) {
-                api.generateContent(VISION_MODEL, apiKey, body)
-            }
-            if (resp.code() == 429) throw RateLimitException()
-            if (!resp.isSuccessful) {
-                throw IllegalStateException("خطأ من الخدمة (${resp.code()})${serviceErrorDetail(resp)}")
-            }
-            val text = resp.body()?.candidates?.firstOrNull()?.content?.parts
-                ?.mapNotNull { it.text }
-                ?.joinToString("") ?: ""
-            Result.success(text.trim())
-        } catch (e: RateLimitException) {
-            Result.failure(IllegalStateException("وصلت للحد المجاني — جرّب تاني بعد شوية."))
-        } catch (e: Exception) {
-            Result.failure(IllegalStateException("مش قادر أقرأ الصورة: ${e.message ?: ""}"))
+        )
+        val resp = withContext(Dispatchers.IO) {
+            api.generateContent(VISION_MODEL, apiKey, body)
         }
+        if (resp.code() == 429) throw RateLimitException()
+        if (resp.code() == 503) throw ServiceOverloadedException()
+        if (!resp.isSuccessful) {
+            throw IllegalStateException("خطأ من الخدمة (${resp.code()})${serviceErrorDetail(resp)}")
+        }
+        return resp.body()?.candidates?.firstOrNull()?.content?.parts
+            ?.mapNotNull { it.text }
+            ?.joinToString("") ?: ""
     }
 }
