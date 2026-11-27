@@ -15,7 +15,24 @@ android {
         versionName = "1.0.0"
     }
 
+    // توقيع ثابت لكل النسخ (Build 24 وما بعدها): ملف keystore واحد محفوظ في
+    // الريبو، عشان أي نسخة جديدة تتثبت فوق القديمة من غير تعارض في التوقيع.
+    // ملحوظة: كلمة السر موجودة هنا لأن الريبو شخصي — لو التطبيق اتنشر على
+    // Play Store لازم مفتاح خاص منفصل.
+    signingConfigs {
+        // "debug" موجود أصلاً افتراضيًا — بنعدّل عليه مش بنعمل واحد جديد.
+        getByName("debug") {
+            storeFile = file("../keystore/memo-voice-studio.keystore")
+            storePassword = "memo1234"
+            keyAlias = "memo"
+            keyPassword = "memo1234"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
