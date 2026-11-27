@@ -20,6 +20,7 @@ import com.memo.voicestudio.SpeechStore
 import com.memo.voicestudio.data.GeminiRepository
 import com.memo.voicestudio.data.PdfText
 import com.memo.voicestudio.data.SettingsStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -299,19 +300,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         // لو تفريغ خلص والتطبيق اتقفل واتفتح تاني، اعرض آخر نتيجة محفوظة.
         viewModelScope.launch(Dispatchers.IO) {
-            val last = TranscriptionStore.loadLastResult(getApplication())
-            if (last != null && !TranscriptionStore.state.value.running) {
-                withContext(Dispatchers.Main) {
-                    transResult = last
-                    sharedText = last
-                    transStatus = "خلص التفريغ ✔"
+            try {
+                val last = TranscriptionStore.loadLastResult(getApplication())
+                if (last != null && !TranscriptionStore.state.value.running) {
+                    withContext(Dispatchers.Main) {
+                        transResult = last
+                        sharedText = last
+                        transStatus = "خلص التفريغ ✔"
+                    }
                 }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                // أي خطأ في تحميل آخر نتيجة ميقتلش التطبيق عند الفتح
             }
         }
         // تابع حالة التفريغ اللي شغال في الخلفية (تقدم/نتيجة/خطأ) — الشاشة
         // توري التقدم الحالي بدل ما تبدأ من جديد لما المستخدم يرجع.
         viewModelScope.launch {
-            TranscriptionStore.state.collect { state ->
+            try {
+                TranscriptionStore.state.collect { state ->
                 isTranscribing = state.running
                 if (state.fileName.isNotBlank()) transFileName = state.fileName
                 if (state.status.isNotBlank()) transStatus = state.status
@@ -322,22 +329,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     transResult = state.result
                     sharedText = state.result
                 }
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
             }
         }
         // لو صوت اتولد والتطبيق اتقفل واتفتح تاني، اعرض آخر ملف صوت محفوظ.
         viewModelScope.launch(Dispatchers.IO) {
-            val lastAudio = SpeechStore.loadLastAudio(getApplication())
-            if (lastAudio != null && !SpeechStore.state.value.running) {
-                withContext(Dispatchers.Main) {
-                    audioFile = lastAudio
-                    speakStatus = "الصوت جاهز ✔ — اضغط تشغيل"
+            try {
+                val lastAudio = SpeechStore.loadLastAudio(getApplication())
+                if (lastAudio != null && !SpeechStore.state.value.running) {
+                    withContext(Dispatchers.Main) {
+                        audioFile = lastAudio
+                        speakStatus = "الصوت جاهز ✔ — اضغط تشغيل"
+                    }
                 }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                // أي خطأ في تحميل آخر صوت ميقتلش التطبيق عند الفتح
             }
         }
         // تابع حالة توليد الصوت اللي شغال في الخلفية — الشاشة توري التقدم
         // الحالي بدل ما تبدأ من جديد لما المستخدم يرجع.
         viewModelScope.launch {
-            SpeechStore.state.collect { state ->
+            try {
+                SpeechStore.state.collect { state ->
                 isSpeaking = state.running
                 if (state.status.isNotBlank()) speakStatus = state.status
                 speakPhase = state.phase
@@ -347,6 +363,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (state.audioPath.isNotBlank()) {
                     audioFile = File(state.audioPath)
                 }
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.memo.voicestudio.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
 
@@ -10,13 +11,24 @@ import androidx.security.crypto.MasterKeys
  */
 class SettingsStore(context: Context) {
 
-    private val prefs = EncryptedSharedPreferences.create(
-        "memo_voice_prefs",
-        MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
-        context,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+    /**
+     * التخزين المشفّر ممكن يفشل على بعض الأجهزة (مشكلة في KeyStore) — وده
+     * كان بيقتل التطبيق عند الفتح لأن SettingsStore بيتعمل في الـ constructor
+     * بتاع الـ ViewModel. لو التشفير فشل، نستخدم تخزين عادي بدل ما التطبيق
+     * يقفل (المفاتيح المحفوظة في التخزين المشفّر مش هتتنقل، فالمستخدم ممكن
+     * يحتاج يدخلها تاني — بس التطبيق هيفتح).
+     */
+    private val prefs: SharedPreferences = try {
+        EncryptedSharedPreferences.create(
+            "memo_voice_prefs",
+            MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
+            context,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    } catch (e: Exception) {
+        context.getSharedPreferences("memo_voice_prefs_plain", Context.MODE_PRIVATE)
+    }
 
     var apiKey: String
         get() = prefs.getString("api_key", "") ?: ""
