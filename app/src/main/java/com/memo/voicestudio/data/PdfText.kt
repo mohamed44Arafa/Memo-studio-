@@ -19,7 +19,12 @@ object PdfText {
         return try {
             PDFBoxResourceLoader.init(context)
             PDDocument.load(file).use { doc ->
-                PDFTextStripper().getText(doc)
+                // نقرأ أول 10 صفحات بس (نفس حد التطبيق) بدل الملف كله —
+                // ملف كبير (مئات الصفحات) كان بيتقرأ كامل قبل ما يبدأ أي حاجة.
+                PDFTextStripper().apply {
+                    startPage = 1
+                    endPage = minOf(doc.numberOfPages, 10)
+                }.getText(doc)
             }
         } catch (e: Exception) {
             null

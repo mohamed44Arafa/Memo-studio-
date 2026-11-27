@@ -22,6 +22,8 @@ import com.memo.voicestudio.data.PdfText
 import com.memo.voicestudio.data.SettingsStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -414,9 +416,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         transcribe(file, lastTransMime)
     }
 
-    /** يوقف المهمة الشغالة (تفريغ أو توليد صوت) — بيبعت أمر إلغاء للسيرفس. */
+    /** يوقف المهمة الشغالة (تفريغ أو توليد صوت أو استخراج نص) — بيبعت أمر إلغاء للسيرفس، أو يلغي مهمة الاستخراج. */
     fun cancelCurrentJob() {
-        TranscriptionService.cancel(getApplication())
+        if (isExtracting) {
+            cancelExtraction()
+        } else {
+            TranscriptionService.cancel(getApplication())
+        }
     }
 
     fun setStatusMessage(message: String) {
@@ -559,9 +565,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ---------- استخراج نص من ملف أو صورة ----------
     var isExtracting by mutableStateOf(false)
         private set
+    /** مهمة استخراج النص الشغالة — عشان زرار الإيقاف يقدر يلغيها وهي بتقرأ PDF أو صورة. */
+    private var extractJob: Job? = null
+
+    /** يلغي استخراج النص الشغال ويرجّع الشاشة لحالتها الطبيعية. */
+    fun cancelExtraction() {
+        extractJob?.cancel()
+        extractJob = null
+        isExtracting = false
+        speakStatus = "اتوقف استخراج النص — تقدر تختار ملف تاني أو تكتب النص بنفسك"
+    }
 
     fun extractFromPdf(file: File) {
-        viewModelScope.launch(Dispatchers.IO) {
+        extractJob?.cancel()
+        extractJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
             isExtracting = true
             speakStatus = "بنقرأ ملف PDF…"
             val text = PdfText.extractText(getApplication(), file)
@@ -573,14 +591,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 return@launch
             }
-            // PDF مصوّر (سكانر): نقرأ الصفحات كصور — 3 صفحات في نفس الوقت
+            // PDF مصوّر (سكانر): نقرأ الصفحات كصور — 5 صفحات في نفس الوقت
             // (كل صفحة مستقلة، والنتيجة بتتجمع بنفس ترتيب الصفحات).
             // renderPageToBitmap بيفتح ملف جديد لكل صفحة، فالتوازي آمن.
             val pages = PdfText.pageCount(file)
             val maxPages = minOf(pages, 10)
             val pageTexts = arrayOfNulls<String>(maxPages)
             speakStatus = "بنقرأ صفحات PDF كصور…"
-            for (window in (0 until maxPages).chunked(3)) {
+            for (window in (0 until maxPages).chunked(5)) {
+                speakStatus = "بنقرأ صفحات PDF كصور… (صفحة ${window.first() + 1} من $maxPages)"
                 coroutineScope {
                     window.map { page ->
                         async {
@@ -604,11 +623,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     speakStatus = "مش قادر أقرأ نص من الملف ده — جرّب صورة أوضح"
                 }
             }
+            } finally {
+                // لو الاستخراج اتلغى (زرار إيقاف) الكود اللي فوق مبيكملش،
+                // فلازم نرجّع الحالة هنا عشان الشاشة متفضلش تلف على الفاضي.
+                withContext(Dispatchers.Main + NonCancellable) { isExtracting = false }
+            }
         }
     }
 
     fun extractFromImage(bitmap: Bitmap) {
-        viewModelScope.launch(Dispatchers.IO) {
+        extractJob?.cancel()
+        extractJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
             isExtracting = true
             speakStatus = "بنقرأ النص من الصورة…"
             val result = repo.ocrImage(bitmap, apiKey.trim()) { speakStatus = it }
@@ -626,6 +652,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     .onFailure {
                         speakStatus = it.message ?: "حصل خطأ"
                     }
+            }
+            } finally {
+                withContext(Dispatchers.Main + NonCancellable) { isExtracting = false }
             }
         }
     }

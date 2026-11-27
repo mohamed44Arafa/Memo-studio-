@@ -220,7 +220,7 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                             else -> pickFile.launch("*/*")
                         }
                     },
-                    enabled = !viewModel.isSpeaking && !viewModel.isExtracting,
+                    enabled = !viewModel.isSpeaking,
                     modifier = Modifier.height(48.dp)
                 ) { Text("تغيير الملف ↻", fontSize = 14.sp) }
             }
@@ -336,12 +336,12 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                     },
                     fontSize = 16.sp
                 )
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = { viewModel.cancelCurrentJob() },
-                    modifier = Modifier.fillMaxWidth().height(52.dp)
-                ) { Text("إيقاف ✕", fontSize = 16.sp) }
             }
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { viewModel.cancelCurrentJob() },
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) { Text("إيقاف ✕", fontSize = 16.sp) }
         }
 
         if (!viewModel.isSpeaking && !viewModel.isExtracting && viewModel.hasGeneratedSpeech && viewModel.speakText.isNotBlank()) {
