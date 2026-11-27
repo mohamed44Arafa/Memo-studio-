@@ -336,7 +336,20 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                     },
                     fontSize = 16.sp
                 )
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { viewModel.cancelCurrentJob() },
+                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                ) { Text("إيقاف ✕", fontSize = 16.sp) }
             }
+        }
+
+        if (!viewModel.isSpeaking && !viewModel.isExtracting && viewModel.hasGeneratedSpeech && viewModel.speakText.isNotBlank()) {
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { viewModel.speak() },
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) { Text("إعادة التوليد ↻", fontSize = 16.sp) }
         }
 
         if (viewModel.speakStatus.isNotBlank()) {

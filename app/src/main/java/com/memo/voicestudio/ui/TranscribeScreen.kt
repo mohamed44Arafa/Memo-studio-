@@ -162,6 +162,19 @@ fun TranscribeScreen(viewModel: MainViewModel, onGoToSpeak: () -> Unit) {
                 "التفريغ شغال في الخلفية — تقدر تخرج من التطبيق وهيكمّل، وهتلاقي إشعار بالتقدم.",
                 fontSize = 16.sp
             )
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { viewModel.cancelCurrentJob() },
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) { Text("إيقاف ✕", fontSize = 16.sp) }
+        }
+
+        if (!viewModel.isTranscribing && viewModel.canRetryTranscription()) {
+            Spacer(Modifier.height(16.dp))
+            OutlinedButton(
+                onClick = { viewModel.retryTranscription() },
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) { Text("إعادة التفريغ ↻", fontSize = 16.sp) }
         }
 
         if (viewModel.transStatus.isNotBlank()) {

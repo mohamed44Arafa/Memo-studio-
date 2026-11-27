@@ -296,6 +296,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var transSegmentTotal by mutableStateOf(0)
         private set
+    /** آخر ملف تفريغ (للإعادة بنفس الملف من غير ما تختاره تاني). */
+    private var lastTransFile: File? = null
+    private var lastTransMime: String = ""
+    /** اتعمل توليد صوت قبل كده في الجلسة دي (لزر "إعادة التوليد"). */
+    var hasGeneratedSpeech by mutableStateOf(false)
+        private set
 
     init {
         // لو تفريغ خلص والتطبيق اتقفل واتفتح تاني، اعرض آخر نتيجة محفوظة.
@@ -371,6 +377,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun transcribe(file: File, mimeType: String) {
+        lastTransFile = file
+        lastTransMime = mimeType
         transFileName = file.name
         transResult = ""
         transStatus = "بنبدأ…"
@@ -380,6 +388,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         isTranscribing = true
         // التفريغ بيشتغل في فورجراوند سيرفس عشان يكمّل في الخلفية.
         TranscriptionService.start(getApplication(), file, mimeType)
+    }
+
+    /** هل فيه ملف جاهز لإعادة التفريغ (نفس الملف من غير ما تختاره تاني). */
+    fun canRetryTranscription(): Boolean = lastTransFile != null && !isTranscribing
+
+    /** يعيد تفريغ آخر ملف من الأول (ريفرش للتفريغ). */
+    fun retryTranscription() {
+        val file = lastTransFile ?: return
+        if (isTranscribing) return
+        transcribe(file, lastTransMime)
+    }
+
+    /** يوقف المهمة الشغالة (تفريغ أو توليد صوت) — بيبعت أمر إلغاء للسيرفس. */
+    fun cancelCurrentJob() {
+        TranscriptionService.cancel(getApplication())
     }
 
     fun setStatusMessage(message: String) {
@@ -469,6 +492,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 speakChunkCurrent = 0
                 speakChunkTotal = 0
                 isSpeaking = true
+                hasGeneratedSpeech = true
                 // توليد الصوت بيشتغل في فورجراوند سيرفس عشان يكمّل في الخلفية.
                 TranscriptionService.startSpeech(
                     getApplication(), inputFile, voiceName, languageCode(), style, gender

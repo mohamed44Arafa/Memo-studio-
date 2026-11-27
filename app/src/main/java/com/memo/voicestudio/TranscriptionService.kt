@@ -184,6 +184,14 @@ class TranscriptionService : Service() {
             }
             context.startForegroundService(intent)
         }
+
+        /** يوقف المهمة الشغالة (تفريغ أو صوت) من داخل التطبيق — نفس زر "إلغاء" في الإشعار. */
+        fun cancel(context: Context) {
+            val intent = Intent(context, TranscriptionService::class.java).apply {
+                action = ACTION_CANCEL
+            }
+            context.startService(intent)
+        }
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -209,7 +217,12 @@ class TranscriptionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_CANCEL) {
-            cancelCurrentJob()
+            // إلغاء بس لو فيه مهمة شغالة فعلاً (ممكن الزرار يتداس لحظة ما المهمة تخلص).
+            if (transcribeJob?.isActive == true || speechJob?.isActive == true) {
+                cancelCurrentJob()
+            } else {
+                stopSelf()
+            }
             return START_NOT_STICKY
         }
         // مهمة واحدة في المرة (تفريغ أو صوت) — لو مهمة شغالة، ارفض الجديدة
