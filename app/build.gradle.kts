@@ -3,6 +3,19 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// فك تشفير ملف التوقيع: الملف المحفوظ في الريبو نسخة base64 نصية من الـ keystore
+// (أدوات الرفع مبتقبلش ملفات ثنائية)، فإعدادات البناء تحوّلها لملف keystore
+// ثنائي في مجلد build قبل التوقيع — وده اللي بيتوقع بيه التطبيق فعلاً.
+val keystoreB64File = file("../keystore/memo-voice-studio.keystore")
+val decodedKeystoreFile = layout.buildDirectory.file("keystore/memo-voice-studio.keystore").get().asFile
+if (keystoreB64File.exists()) {
+    val decoded = java.util.Base64.getDecoder().decode(keystoreB64File.readText().trim())
+    if (!decodedKeystoreFile.exists() || decodedKeystoreFile.readBytes() != decoded) {
+        decodedKeystoreFile.parentFile.mkdirs()
+        decodedKeystoreFile.writeBytes(decoded)
+    }
+}
+
 android {
     namespace = "com.memo.voicestudio"
     compileSdk = 34
@@ -21,8 +34,9 @@ android {
     // Play Store لازم مفتاح خاص منفصل.
     signingConfigs {
         // "debug" موجود أصلاً افتراضيًا — بنعدّل عليه مش بنعمل واحد جديد.
+        // storeFile هو الملف الثنائي اللي اتفك تشفيره فوق (مش الملف النصي في الريبو).
         getByName("debug") {
-            storeFile = file("../keystore/memo-voice-studio.keystore")
+            storeFile = decodedKeystoreFile
             storePassword = "memo1234"
             keyAlias = "memo"
             keyPassword = "memo1234"
