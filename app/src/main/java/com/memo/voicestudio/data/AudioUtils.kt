@@ -100,10 +100,14 @@ object AudioUtils {
     fun uriToTempFile(context: Context, uri: Uri, fileName: String): File? {
         return try {
             val out = File(context.cacheDir, fileName)
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                out.outputStream().use { output -> input.copyTo(output) }
+            // لو النظام مش قادر يفتح الملف أصلاً، أو النسخة طلعت فاضية (0 بايت)،
+            // نرجّع null عشان الواجهة تقول للمستخدم يختار الملف تاني — بدل ما نبعت ملف فاضي
+            // للخدمات فترفضه برسالة مش مفهومة.
+            val input = context.contentResolver.openInputStream(uri) ?: return null
+            input.use { inputStream ->
+                out.outputStream().use { output -> inputStream.copyTo(output) }
             }
-            out
+            if (out.length() == 0L) null else out
         } catch (e: Exception) {
             null
         }

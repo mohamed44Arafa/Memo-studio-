@@ -295,6 +295,8 @@ class GeminiRepository(private val context: Context) {
             if (audioMime == "application/octet-stream") {
                 AudioUtils.probeMimeType(source)?.let { audioMime = it }
             }
+            // نوع الملف الأصلي (بعد الكشف من المحتوى) — بيتبعت لـ Groq و Deepgram مع الملف الأصلي نفسه.
+            val sourceMime = audioMime
             if (audioMime.startsWith("video/")) {
                 onStatus("بنستخرج الصوت من الفيديو…")
                 val extracted = AudioUtils.extractAudioTrack(source, context.cacheDir)
@@ -320,7 +322,11 @@ class GeminiRepository(private val context: Context) {
                 val text = transcribeSegmentWithChain(
                     seg, audioMime, i + 1, segments.size,
                     apiKey, groqApiKey, deepgramApiKey,
-                    sttOrder, onStatus, onProvider
+                    sttOrder, onStatus, onProvider,
+                    // للملف الكامل (جزء واحد) نبعت الملف الأصلي لـ Groq و Deepgram —
+                    // هما بيفكّوا ترميزه على سيرفرهم، فلو الصوت المستخرج عندنا فيه مشكلة، الأصلي يشتغل.
+                    originalFile = if (segments.size == 1) source else null,
+                    originalMime = sourceMime
                 )
                 out.append(text).append("\n")
             }
@@ -354,7 +360,10 @@ class GeminiRepository(private val context: Context) {
         deepgramApiKey: String,
         order: List<String>,
         onStatus: (String) -> Unit,
-        onProvider: ((String) -> Unit)? = null
+        onProvider: ((String) -> Unit)? = null,
+        // الملف الأصلي ونوعه — لـ Groq و Deepgram بس، لما التفريغ كله جزء واحد.
+        originalFile: File? = null,
+        originalMime: String = ""
     ): String {
         var lastFailure: Exception? = null
         var fromName = ""
@@ -377,11 +386,19 @@ class GeminiRepository(private val context: Context) {
                     }
                     "groq" -> {
                         if (lastFailure == null) onStatus("بنفرّغ الجزء $segmentIndex من $totalSegments مع Groq…")
-                        transcribeWithGroq(seg, audioMime, groqApiKey)
+                        transcribeWithGroq(
+                            originalFile ?: seg,
+                            if (originalFile != null) originalMime else audioMime,
+                            groqApiKey
+                        )
                     }
                     "deepgram" -> {
                         if (lastFailure == null) onStatus("بنفرّغ الجزء $segmentIndex من $totalSegments مع Deepgram…")
-                        transcribeWithDeepgram(seg, audioMime, deepgramApiKey)
+                        transcribeWithDeepgram(
+                            originalFile ?: seg,
+                            if (originalFile != null) originalMime else audioMime,
+                            deepgramApiKey
+                        )
                     }
                     else -> continue
                 }
