@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -69,7 +70,10 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                 BitmapFactory.decodeStream(input)
             }
             withContext(Dispatchers.Main) {
-                if (bitmap != null) viewModel.extractFromImage(bitmap)
+                if (bitmap != null) {
+                    viewModel.markLoadedFile(AudioUtils.displayNameOf(context, uri) ?: "صورة", "image")
+                    viewModel.extractFromImage(bitmap)
+                }
                 else viewModel.setSpeakStatusMessage("مش قادر أفتح الصورة دي")
             }
         }
@@ -86,7 +90,10 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
             scope.launch(Dispatchers.IO) {
                 val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
                 withContext(Dispatchers.Main) {
-                    if (bitmap != null) viewModel.extractFromImage(bitmap)
+                    if (bitmap != null) {
+                        viewModel.markLoadedFile(photoFile.name, "camera")
+                        viewModel.extractFromImage(bitmap)
+                    }
                 }
             }
         }
@@ -103,7 +110,10 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                 mime == "application/pdf" -> {
                     val file = AudioUtils.uriToTempFile(context, uri, name)
                     withContext(Dispatchers.Main) {
-                        if (file != null) viewModel.extractFromPdf(file)
+                        if (file != null) {
+                            viewModel.markLoadedFile(name, "file")
+                            viewModel.extractFromPdf(file)
+                        }
                     }
                 }
                 mime == "text/plain" -> {
@@ -112,6 +122,7 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                     } ?: ""
                     withContext(Dispatchers.Main) {
                         viewModel.speakText = text
+                        viewModel.markLoadedFile(name, "file")
                     }
                 }
                 mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> {
@@ -124,6 +135,7 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                             viewModel.setSpeakStatusMessage("مش قادر أقرأ نص من ملف الوورد ده")
                         } else {
                             viewModel.speakText = text
+                            viewModel.markLoadedFile(name, "file")
                         }
                     }
                 }
@@ -184,6 +196,34 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                 onClick = { viewModel.useTranscriptionAsSpeakText() },
                 modifier = Modifier.weight(1f).height(52.dp)
             ) { Text("من آخر تفريغ", fontSize = 14.sp) }
+        }
+
+        if (viewModel.loadedFileName != null) {
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "الملف: ${viewModel.loadedFileName}",
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedButton(
+                    onClick = {
+                        when (viewModel.loadedFileSource) {
+                            "image" -> pickImage.launch("image/*")
+                            "camera" -> takePhoto.launch(photoUri)
+                            else -> pickFile.launch("*/*")
+                        }
+                    },
+                    enabled = !viewModel.isSpeaking && !viewModel.isExtracting,
+                    modifier = Modifier.height(48.dp)
+                ) { Text("تغيير الملف ↻", fontSize = 14.sp) }
+            }
         }
 
         Spacer(Modifier.height(20.dp))

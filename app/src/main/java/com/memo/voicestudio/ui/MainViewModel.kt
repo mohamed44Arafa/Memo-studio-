@@ -372,7 +372,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun useTranscriptionAsSpeakText() {
-        if (transResult.isNotBlank()) speakText = transResult
+        if (transResult.isNotBlank()) {
+            speakText = transResult
+            clearLoadedFile()
+        }
+    }
+
+    // ---------- الملف المحمّل في شاشة النطق (لزر "تغيير الملف") ----------
+    /** اسم آخر ملف حُمّل في شاشة النطق (null لو النص مكتوب يدوي أو من التفريغ). */
+    var loadedFileName by mutableStateOf<String?>(null)
+        private set
+    /** مصدر الملف المحمّل: "file" أو "image" أو "camera". */
+    var loadedFileSource by mutableStateOf<String?>(null)
+        private set
+
+    fun markLoadedFile(name: String, source: String) {
+        loadedFileName = name
+        loadedFileSource = source
+    }
+
+    fun clearLoadedFile() {
+        loadedFileName = null
+        loadedFileSource = null
     }
 
     // ---------- النطق ----------
