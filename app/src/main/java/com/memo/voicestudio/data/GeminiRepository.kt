@@ -39,6 +39,16 @@ class ServiceOverloadedException : RateLimitException()
 /** رصيد المزوّد المجاني خلص — يُعامل مثل تجاوز الحد: التبديل للبديل. */
 class CreditExhaustedException(message: String) : Exception(message)
 
+/** خطأ داخلي من سيرفر الخدمة (500 مثلاً) — يستاهل التبديل للمزوّد البديل زي الضغط تمامًا. */
+class ServerErrorException(message: String) : Exception(message)
+
+    /** يرمي الاستثناء المناسب لرد غير ناجح: أخطاء السيرفر (5xx) تتبدّل للبديل، والباقي خطأ عادي بنفس رسالته. */
+    private fun throwServiceError(prefix: String, code: Int, detail: String): Nothing {
+        val msg = "$prefix ($code)$detail"
+        if (code in 500..599) throw ServerErrorException(msg)
+        throw IllegalStateException(msg)
+    }
+
 /**
  * كل التعامل مع Gemini API هنا:
  * - التفريغ: gemini-3.5-transcribe (باقة مجانية: حتى ساعة في الطلب، ~25 طلب/يوم)
@@ -394,6 +404,9 @@ class GeminiRepository(private val context: Context) {
             } catch (e: RateLimitException) {
                 if (attempt >= 2) throw e
                 delay(65_000)
+            } catch (e: ServerErrorException) {
+                if (attempt >= 2) throw e
+                delay(65_000)
             }
         }
     }
@@ -417,7 +430,7 @@ class GeminiRepository(private val context: Context) {
         if (resp.code() == 429) throw RateLimitException()
         if (resp.code() == 503) throw ServiceOverloadedException()
         if (!resp.isSuccessful) {
-            throw IllegalStateException("خطأ من الخدمة (${resp.code()})${serviceErrorDetail(resp)}")
+            throwServiceError("خطأ من الخدمة", resp.code(), serviceErrorDetail(resp))
         }
         val text = resp.body()?.candidates?.firstOrNull()?.content?.parts
             ?.mapNotNull { it.text }
@@ -666,6 +679,10 @@ class GeminiRepository(private val context: Context) {
                 onStatus("Gemini مشغول دلوقتي — هنستنى شوية ونحاول تاني…")
                 delay(65_000)
                 generatePodcastScript(text, languageCode, apiKey)
+            } catch (e: ServerErrorException) {
+                onStatus("الخدمة حصل فيها خطأ داخلي — هنستنى شوية ونحاول تاني…")
+                delay(65_000)
+                generatePodcastScript(text, languageCode, apiKey)
             }
             val chunks = splitPodcastScript(script)
             if (chunks.isEmpty()) {
@@ -768,7 +785,7 @@ class GeminiRepository(private val context: Context) {
         if (resp.code() == 429) throw RateLimitException()
         if (resp.code() == 503) throw ServiceOverloadedException()
         if (!resp.isSuccessful) {
-            throw IllegalStateException("خطأ من الخدمة (${resp.code()})${serviceErrorDetail(resp)}")
+            throwServiceError("خطأ من الخدمة", resp.code(), serviceErrorDetail(resp))
         }
         return resp.body()?.candidates?.firstOrNull()?.content?.parts
             ?.mapNotNull { it.text }
@@ -806,6 +823,9 @@ class GeminiRepository(private val context: Context) {
             } catch (e: RateLimitException) {
                 if (attempt >= 2) throw e
                 delay(65_000)
+            } catch (e: ServerErrorException) {
+                if (attempt >= 2) throw e
+                delay(65_000)
             }
         }
     }
@@ -833,7 +853,7 @@ class GeminiRepository(private val context: Context) {
         if (resp.code() == 429) throw RateLimitException()
         if (resp.code() == 503) throw ServiceOverloadedException()
         if (!resp.isSuccessful) {
-            throw IllegalStateException("خطأ من خدمة الصوت (${resp.code()})${serviceErrorDetail(resp)}")
+            throwServiceError("خطأ من خدمة الصوت", resp.code(), serviceErrorDetail(resp))
         }
         val data = resp.body()?.candidates?.firstOrNull()?.content?.parts
             ?.firstOrNull { it.inlineData != null }?.inlineData?.data
@@ -864,7 +884,7 @@ class GeminiRepository(private val context: Context) {
                 if (resp.code == 429) throw RateLimitException()
                 if (resp.code == 503) throw ServiceOverloadedException()
                 if (!resp.isSuccessful) {
-                    throw IllegalStateException("خطأ من Groq (${resp.code})")
+                    throwServiceError("خطأ من Groq", resp.code, "")
                 }
                 val parsed = gson.fromJson(resp.body?.string(), GroqTranscriptionResponse::class.java)
                 parsed.text?.trim()?.takeIf { it.isNotEmpty() }
@@ -890,7 +910,7 @@ class GeminiRepository(private val context: Context) {
                     throw CreditExhaustedException("رصيد Deepgram خلص — الرصيد المجاني ٢٠٠ دولار مرة واحدة.")
                 }
                 if (!resp.isSuccessful) {
-                    throw IllegalStateException("خطأ من Deepgram (${resp.code})")
+                    throwServiceError("خطأ من Deepgram", resp.code, "")
                 }
                 val parsed = gson.fromJson(resp.body?.string(), DeepgramTranscriptionResponse::class.java)
                 parsed.results?.channels?.firstOrNull()?.alternatives?.firstOrNull()?.transcript?.trim()
@@ -900,9 +920,9 @@ class GeminiRepository(private val context: Context) {
         }
     }
 
-    /** فشل يستاهل التبديل للمزوّد اللي بعده: تجاوز حد أو ضغط أو انتهاء رصيد. */
+    /** فشل يستاهل التبديل للمزوّد اللي بعده: تجاوز حد أو ضغط أو انتهاء رصيد أو خطأ داخلي من السيرفر (500). */
     private fun isFallbackFailure(e: Exception): Boolean =
-        e is RateLimitException || e is CreditExhaustedException
+        e is RateLimitException || e is CreditExhaustedException || e is ServerErrorException
 
     /** ترتيب المزودين: المختار يدويًا أولاً، وبعده باقي المزودين المتاحين بالترتيب الافتراضي. */
     private fun orderedProviders(
@@ -925,6 +945,7 @@ class GeminiRepository(private val context: Context) {
         when (cause) {
             is ServiceOverloadedException -> "$fromName مشغول دلوقتي — بنكمّل مع $toName…"
             is CreditExhaustedException -> "رصيد $fromName خلص — بنكمّل مع $toName…"
+            is ServerErrorException -> "$fromName حصله خطأ داخلي — بنكمّل مع $toName…"
             else -> "ليمت $fromName خلص — بنكمّل مع $toName…"
         }
 
@@ -948,7 +969,7 @@ class GeminiRepository(private val context: Context) {
                 if (resp.code == 429) throw RateLimitException()
                 if (resp.code == 503) throw ServiceOverloadedException()
                 if (!resp.isSuccessful) {
-                    throw IllegalStateException("خطأ من Azure (${resp.code})")
+                    throwServiceError("خطأ من Azure", resp.code, "")
                 }
                 resp.body?.bytes() ?: throw IllegalStateException("Azure رجّع صوت فاضي")
             }
@@ -1003,7 +1024,7 @@ class GeminiRepository(private val context: Context) {
                     throw CreditExhaustedException("رصيد ElevenLabs المجاني خلص — بييجي ١٠ آلاف نقطة جديدة كل شهر.")
                 }
                 if (!resp.isSuccessful) {
-                    throw IllegalStateException("خطأ من ElevenLabs (${resp.code})")
+                    throwServiceError("خطأ من ElevenLabs", resp.code, "")
                 }
                 val bytes = resp.body?.bytes() ?: throw IllegalStateException("ElevenLabs رجّع صوت فاضي")
                 if (bytes.isEmpty()) throw IllegalStateException("ElevenLabs رجّع صوت فاضي")
@@ -1059,7 +1080,7 @@ class GeminiRepository(private val context: Context) {
                     throw CreditExhaustedException("رصيد Cartesia المجاني خلص — بييجي ٢٠ ألف نقطة جديدة كل شهر.")
                 }
                 if (!resp.isSuccessful) {
-                    throw IllegalStateException("خطأ من Cartesia (${resp.code})")
+                    throwServiceError("خطأ من Cartesia", resp.code, "")
                 }
                 val bytes = resp.body?.bytes() ?: throw IllegalStateException("Cartesia رجّع صوت فاضي")
                 if (bytes.isEmpty()) throw IllegalStateException("Cartesia رجّع صوت فاضي")
@@ -1102,6 +1123,9 @@ class GeminiRepository(private val context: Context) {
             } catch (e: RateLimitException) {
                 if (attempt >= 2) throw e
                 delay(65_000)
+            } catch (e: ServerErrorException) {
+                if (attempt >= 2) throw e
+                delay(65_000)
             }
         }
     }
@@ -1130,7 +1154,7 @@ class GeminiRepository(private val context: Context) {
         if (resp.code() == 429) throw RateLimitException()
         if (resp.code() == 503) throw ServiceOverloadedException()
         if (!resp.isSuccessful) {
-            throw IllegalStateException("خطأ من خدمة الصوت (${resp.code()})${serviceErrorDetail(resp)}")
+            throwServiceError("خطأ من خدمة الصوت", resp.code(), serviceErrorDetail(resp))
         }
         val data = resp.body()?.candidates?.firstOrNull()?.content?.parts
             ?.firstOrNull { it.inlineData != null }?.inlineData?.data
