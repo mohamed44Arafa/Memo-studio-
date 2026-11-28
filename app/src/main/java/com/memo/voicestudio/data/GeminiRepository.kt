@@ -5,12 +5,14 @@ import android.graphics.Bitmap
 import android.util.Base64
 import com.google.gson.Gson
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.Dispatchers
 import okhttp3.Call
 import okhttp3.Callback
@@ -1184,28 +1186,49 @@ class GeminiRepository(private val context: Context) {
         apiKey: String
     ): ByteArray {
         val fullText = stylePrefix(style, languageCode) + chunk
-        val body = GenerateRequest(
-            contents = listOf(Content(parts = listOf(Part(text = fullText)))),
-            generationConfig = GenerationConfig(
-                responseModalities = listOf("AUDIO"),
-                speechConfig = SpeechConfig(
-                    voiceConfig = VoiceConfig(PrebuiltVoiceConfig(voiceName)),
-                    languageCode = languageCode
+        val json = gson.toJson(
+            GenerateRequest(
+                contents = listOf(Content(parts = listOf(Part(text = fullText)))),
+                generationConfig = GenerationConfig(
+                    responseModalities = listOf("AUDIO"),
+                    speechConfig = SpeechConfig(
+                        voiceConfig = VoiceConfig(PrebuiltVoiceConfig(voiceName)),
+                        languageCode = languageCode
+                    )
                 )
             )
         )
-        val resp = withContext(Dispatchers.IO) {
-            api.generateContent(TTS_MODEL, apiKey, body)
+        val request = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models/$TTS_MODEL:generateContent?key=$apiKey")
+            .post(json.toRequestBody("application/json".toMediaType()))
+            .build()
+        // توليد الصوت العادي من Gemini كان بيروح من طريق Retrofit، والطلب المعلق فيه
+        // مبيتقطعش بزرار "إيقاف" ومبيتبدلش للبديل لو Gemini علّق من غير رد — فالتطبيق
+        // كان بيستنى لحد 120 ثانية على الفاضي. دلوقتي بنستخدم نفس الطريق القابل
+        // للإلغاء اللي بيستخدمه باقي المزودين (Build 30)، ولو Gemini مردّش خلال
+        // 40 ثانية بنعتبره فشل وبنبدّل تلقائيًا للمزوّد اللي بعده.
+        try {
+            return withTimeout(40_000) {
+                withContext(Dispatchers.IO) {
+                    http.newCall(request).executeCancellable().use { resp ->
+                        if (resp.code == 429) throw RateLimitException()
+                        if (resp.code == 503) throw ServiceOverloadedException()
+                        if (!resp.isSuccessful) {
+                            throwServiceError("خطأ من خدمة الصوت", resp.code, okHttpErrorDetail(resp))
+                        }
+                        val bodyString = resp.body?.string()
+                            ?: throw IllegalStateException("الخدمة رجّعت صوت فاضي")
+                        val data = gson.fromJson(bodyString, GenerateResponse::class.java)
+                            .candidates?.firstOrNull()?.content?.parts
+                            ?.firstOrNull { it.inlineData != null }?.inlineData?.data
+                            ?: throw IllegalStateException("الخدمة رجّعت صوت فاضي")
+                        Base64.decode(data, Base64.DEFAULT)
+                    }
+                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            throw ProviderFailureException("Gemini مردّش خلال 40 ثانية — بنكمّل مع البديل…")
         }
-        if (resp.code() == 429) throw RateLimitException()
-        if (resp.code() == 503) throw ServiceOverloadedException()
-        if (!resp.isSuccessful) {
-            throwServiceError("خطأ من خدمة الصوت", resp.code(), serviceErrorDetail(resp))
-        }
-        val data = resp.body()?.candidates?.firstOrNull()?.content?.parts
-            ?.firstOrNull { it.inlineData != null }?.inlineData?.data
-            ?: throw IllegalStateException("الخدمة رجّعت صوت فاضي")
-        return Base64.decode(data, Base64.DEFAULT)
     }
 
     /**
