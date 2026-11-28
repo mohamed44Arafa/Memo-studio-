@@ -562,14 +562,23 @@ class GeminiRepository(private val context: Context) {
         gender: String = "female",
         // المزود المختار يدويًا من الإعدادات ("auto" أو اسم مزود) — يتجرب الأول.
         voiceProvider: String = "auto",
+        // آخر مزوّد صوت نجح — بيتجرّب الأول في الوضع التلقائي.
+        lastWorkingVoiceProvider: String = "",
         // المزوّد اللي شغال دلوقتي — للعرض في الواجهة.
         onProvider: ((String) -> Unit)? = null,
+        // يتنده لما مزوّد ينجح في توليد مقطع — عشان يتسجّل كآخر مزوّد شغال.
+        onProviderSuccess: ((String) -> Unit)? = null,
         // تقدّم التوليد: المرحلة ("script" لتجهيز الحوار أو "audio" لتوليد الصوت)
         // والمقطع الحالي من إجمالي المقاطع — للسيرفس والإشعار.
         onProgress: ((phase: String, current: Int, total: Int) -> Unit)? = null
     ): Result<File> {
+        // في الوضع التلقائي: المزوّد اللي نجح آخر مرة يتجرّب الأول،
+        // وبعده باقي المزوّدين بالترتيب الافتراضي. الاختيار اليدوي يفضل له الأولوية.
+        val effectiveVoiceProvider = if (voiceProvider != "auto") voiceProvider
+            else if (lastWorkingVoiceProvider in listOf("gemini", "azure", "elevenlabs", "cartesia")) lastWorkingVoiceProvider
+            else "auto"
         val voiceOrder = orderedProviders(
-            voiceProvider,
+            effectiveVoiceProvider,
             listOf("gemini", "azure", "elevenlabs", "cartesia")
         ) { provider ->
             when (provider) {
@@ -611,7 +620,7 @@ class GeminiRepository(private val context: Context) {
                 val bytes = speakChunkWithChain(
                     chunk, voiceName, languageCode, style,
                     apiKey, azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey, gender,
-                    voiceOrder, onStatus, onProvider
+                    voiceOrder, onStatus, onProvider, onProviderSuccess
                 )
                 onProgress?.invoke("audio", completed.incrementAndGet(), chunks.size)
                 bytes
@@ -653,7 +662,8 @@ class GeminiRepository(private val context: Context) {
         gender: String,
         order: List<String>,
         onStatus: (String) -> Unit,
-        onProvider: ((String) -> Unit)? = null
+        onProvider: ((String) -> Unit)? = null,
+        onProviderSuccess: ((String) -> Unit)? = null
     ): ByteArray {
         var lastFailure: Exception? = null
         var fromName = ""
@@ -663,7 +673,7 @@ class GeminiRepository(private val context: Context) {
                     onStatus(fallbackStatus(lastFailure, fromName, providerDisplayName(provider)))
                 }
                 onProvider?.invoke(provider)
-                return when (provider) {
+                val bytes = when (provider) {
                     "gemini" -> {
                         // لو Gemini هو المزود الوحيد المتاح، نعيد المحاولة مرة بعد 65 ثانية (السلوك الحالي).
                         if (order.size == 1) speakChunkWithRetry(chunk, voiceName, languageCode, style, apiKey)
@@ -680,6 +690,8 @@ class GeminiRepository(private val context: Context) {
                     "cartesia" -> speakChunkWithCartesia(chunk, cartesiaApiKey)
                     else -> continue
                 }
+                onProviderSuccess?.invoke(provider)
+                return bytes
             } catch (e: Exception) {
                 if (!isFallbackFailure(e)) throw e
                 lastFailure = e

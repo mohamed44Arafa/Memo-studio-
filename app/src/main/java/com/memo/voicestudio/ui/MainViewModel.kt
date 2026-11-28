@@ -23,6 +23,7 @@ import com.memo.voicestudio.data.SettingsStore
 import com.memo.voicestudio.data.YouTubeCaptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
@@ -304,8 +305,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var lastTransMime: String = ""
     /** مهمة جلب الكابشن من لينك يوتيوب (عشان زرار الإيقاف يلغيها). */
     private var linkJob: Job? = null
+    /** مهمة مراقبة حالة توليد الصوت — بتنسخ حالة المتجر للشاشة كل ثانية أثناء التوليد،
+     * عشان الشاشة توري التقدم حتى لو المتابعة اللي في الـ init وقفت لأي سبب. */
+    private var speechWatchJob: Job? = null
     /** اتعمل توليد صوت قبل كده في الجلسة دي (لزر "إعادة التوليد"). */
     var hasGeneratedSpeech by mutableStateOf(false)
+        private set
+    /** التفريغ الحالي محفوظ في التطبيق (هيظهر تاني بعد قفل التطبيق وفتحه). */
+    var isTranscriptionSaved by mutableStateOf(settings.isTranscriptionSaved)
+        private set
+    /** الصوت الحالي محفوظ في التطبيق (هيظهر تاني بعد قفل التطبيق وفتحه). */
+    var isAudioSaved by mutableStateOf(settings.isAudioSaved)
         private set
 
     init {
@@ -321,7 +331,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val last = TranscriptionStore.loadLastResult(getApplication())
-                if (last != null && !TranscriptionStore.state.value.running) {
+                if (last != null && !TranscriptionStore.state.value.running && settings.isTranscriptionSaved) {
                     withContext(Dispatchers.Main) {
                         transResult = last
                         sharedText = last
@@ -339,6 +349,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 TranscriptionStore.state.collect { state ->
                 isTranscribing = state.running
+                isTranscriptionSaved = settings.isTranscriptionSaved
                 if (state.fileName.isNotBlank()) transFileName = state.fileName
                 if (state.status.isNotBlank()) transStatus = state.status
                 transSegmentCurrent = state.currentSegment
@@ -357,7 +368,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val lastAudio = SpeechStore.loadLastAudio(getApplication())
-                if (lastAudio != null && !SpeechStore.state.value.running) {
+                if (lastAudio != null && !SpeechStore.state.value.running && settings.isAudioSaved) {
                     withContext(Dispatchers.Main) {
                         audioFile = lastAudio
                         speakStatus = "الصوت جاهز ✔ — اضغط تشغيل"
@@ -374,6 +385,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 SpeechStore.state.collect { state ->
                 isSpeaking = state.running
+                isAudioSaved = settings.isAudioSaved
                 if (state.status.isNotBlank()) speakStatus = state.status
                 speakPhase = state.phase
                 speakChunkCurrent = state.currentChunk
@@ -448,6 +460,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     sharedText = text
                     transStatus = "خلص التفريغ ✔ (من كابشن الفيديو)"
                     isTranscribing = false
+                    // نص جديد غير محفوظ — الحفظ القديم كان للنص اللي قبله.
+                    isTranscriptionSaved = false
+                    settings.isTranscriptionSaved = false
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
@@ -467,6 +482,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** يوقف المهمة الشغالة (تفريغ أو توليد صوت أو استخراج نص) — بيبعت أمر إلغاء للسيرفس، أو يلغي مهمة الاستخراج. */
     fun cancelCurrentJob() {
+        speechWatchJob?.cancel()
         if (isExtracting) {
             cancelExtraction()
         } else if (linkJob?.isActive == true) {
@@ -496,6 +512,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSpeakStatusMessage(message: String) {
         speakStatus = message
+    }
+
+    /** يحفظ التفريغ الحالي داخل التطبيق (مش داونلود) — أو يلغي حفظه لو محفوظ. */
+    fun toggleSaveTranscription() {
+        if (transResult.isBlank()) return
+        isTranscriptionSaved = !isTranscriptionSaved
+        settings.isTranscriptionSaved = isTranscriptionSaved
+        transStatus = if (isTranscriptionSaved) "اتحفظ ✔ — هيفضل موجود لما تفتح التطبيق تاني"
+            else "اتلغى الحفظ — مش هيظهر لما تفتح التطبيق تاني"
+    }
+
+    /** يحفظ الصوت الحالي داخل التطبيق (مش داونلود) — أو يلغي حفظه لو محفوظ. */
+    fun toggleSaveAudio() {
+        if (audioFile == null) return
+        isAudioSaved = !isAudioSaved
+        settings.isAudioSaved = isAudioSaved
+        speakStatus = if (isAudioSaved) "اتحفظ ✔ — هيفضل موجود لما تفتح التطبيق تاني"
+            else "اتلغى الحفظ — مش هيظهر لما تفتح التطبيق تاني"
     }
 
     fun useTranscriptionAsSpeakText() {
@@ -587,6 +621,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (e: Exception) {
                     isSpeaking = false
                     speakStatus = "مش قادر أشغّل توليد الصوت — جرّب تاني"
+                }
+                // مراقبة مباشرة لحالة التوليد: بتنسخ حالة المتجر للشاشة كل ثانية
+                // لحد ما المهمة تخلص — لو المتابعة الأساسية وقفت، دي بتكمّل مكانها.
+                speechWatchJob?.cancel()
+                speechWatchJob = viewModelScope.launch {
+                    while (isActive) {
+                        val st = SpeechStore.state.value
+                        isSpeaking = st.running
+                        isAudioSaved = settings.isAudioSaved
+                        if (st.status.isNotBlank()) speakStatus = st.status
+                        speakPhase = st.phase
+                        speakChunkCurrent = st.currentChunk
+                        speakChunkTotal = st.totalChunks
+                        if (st.provider.isNotBlank()) activeVoiceProvider = st.provider
+                        if (st.audioPath.isNotBlank()) audioFile = File(st.audioPath)
+                        if (!st.running) break
+                        delay(1000)
+                    }
                 }
             }
         }

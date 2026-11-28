@@ -218,7 +218,9 @@ class TranscriptionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_CANCEL) {
             // إلغاء بس لو فيه مهمة شغالة فعلاً (ممكن الزرار يتداس لحظة ما المهمة تخلص).
-            if (transcribeJob?.isActive == true || speechJob?.isActive == true) {
+            // الحالة من المتجر مش من الـ Job — الـ Job بيفضل "نشط" 3 ثواني بعد
+            // النتيجة (بيعرض إشعار النهاية)، وإلغاؤه ساعتها كان هيقلب "خلص ✔" لـ "اتلغى".
+            if (TranscriptionStore.state.value.running || SpeechStore.state.value.running) {
                 cancelCurrentJob()
             } else {
                 // مفيش مهمة شغالة فعلاً — ممكن تكون خلصت أو وقعت من غير ما تحدّث الحالة،
@@ -238,7 +240,10 @@ class TranscriptionService : Service() {
         }
         // مهمة واحدة في المرة (تفريغ أو صوت) — لو مهمة شغالة، ارفض الجديدة
         // (الواجهة بتمنع ده أصلاً وبتبيّن رسالة "في مهمة شغالة دلوقتي").
-        if (transcribeJob?.isActive == true || speechJob?.isActive == true) return START_NOT_STICKY
+        // الحالة من المتجر مش من الـ Job — الـ Job بيفضل "نشط" 3 ثواني بعد ما
+        // النتيجة تخلص (بيعرض إشعار النهاية)، ورفض طلب جديد في الـ 3 ثواني دول
+        // كان بيخلّي الشاشة تفضل تلف على "بنبدأ…" على الفاضي من غير أي مهمة شغالة.
+        if (TranscriptionStore.state.value.running || SpeechStore.state.value.running) return START_NOT_STICKY
 
         val job = intent?.getStringExtra(EXTRA_JOB) ?: JOB_TRANSCRIPTION
         if (job == JOB_SPEECH) {
@@ -261,7 +266,7 @@ class TranscriptionService : Service() {
                 SpeechState(running = true, kind = currentSpeechKind, status = "بنبدأ…")
             }
             speechJob = serviceScope.launch {
-                runSpeech(File(path), voiceName, languageCode, style, gender)
+                runSpeech(File(path), voiceName, languageCode, style, gender, startId)
             }
         } else {
             val path = intent?.getStringExtra(EXTRA_FILE_PATH) ?: return START_NOT_STICKY
@@ -279,13 +284,13 @@ class TranscriptionService : Service() {
                 TranscriptionState(running = true, fileName = currentFileName, status = "بنبدأ…")
             }
             transcribeJob = serviceScope.launch {
-                runTranscription(File(path), mimeType)
+                runTranscription(File(path), mimeType, startId)
             }
         }
         return START_NOT_STICKY
     }
 
-    private suspend fun runTranscription(source: File, mimeType: String) {
+    private suspend fun runTranscription(source: File, mimeType: String, startId: Int) {
         // المفاتيح بتتقرأ من الإعدادات المشفّرة هنا، مش بتتبعت في الـ Intent.
         val settings = SettingsStore(applicationContext)
         val repo = GeminiRepository(applicationContext)
@@ -314,6 +319,8 @@ class TranscriptionService : Service() {
             result
                 .onSuccess { text ->
                     TranscriptionStore.saveResult(applicationContext, text)
+                    // نتيجة جديدة غير محفوظة — الحفظ القديم كان للنص اللي قبله.
+                    settings.isTranscriptionSaved = false
                     TranscriptionStore.update {
                         it.copy(running = false, status = "خلص التفريغ ✔", result = text)
                     }
@@ -332,15 +339,16 @@ class TranscriptionService : Service() {
                 TranscriptionState(running = false, fileName = currentFileName, status = "اتلغى التفريغ")
             }
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            stopSelf(startId)
             return
         }
         // الإشعار النهائي اتعرض 3 ثواني — السيرفس بيقف والإشعار بيختفي معاه.
-        stopSelf()
+        // stopSelf برقم البدء عشان لو مهمة جديدة بدأت في النص، متوقفش السيرفس وهي شغالة.
+        stopSelf(startId)
     }
 
     /** توليد الصوت/البودكاست في الخلفية بنفس `synthesize()` (نفس سلسلة بدائل الصوت). */
-    private suspend fun runSpeech(inputFile: File, voiceName: String, languageCode: String, style: String, gender: String) {
+    private suspend fun runSpeech(inputFile: File, voiceName: String, languageCode: String, style: String, gender: String, startId: Int) {
         // المفاتيح واختيار المزود اليدوي بيتقروا من الإعدادات هنا، مش بيتبعتوا في الـ Intent.
         val settings = SettingsStore(applicationContext)
         val repo = GeminiRepository(applicationContext)
@@ -364,8 +372,12 @@ class TranscriptionService : Service() {
                 cartesiaApiKey = settings.cartesiaApiKey.trim(),
                 gender = gender,
                 voiceProvider = settings.voiceProvider,
+                lastWorkingVoiceProvider = settings.lastWorkingVoiceProvider,
                 onProvider = { p ->
                     SpeechStore.update { it.copy(provider = p) }
+                },
+                onProviderSuccess = { p ->
+                    try { settings.lastWorkingVoiceProvider = p } catch (_: Exception) { }
                 },
                 onProgress = { phase, current, total ->
                     currentPhase = phase
@@ -378,6 +390,8 @@ class TranscriptionService : Service() {
             result
                 .onSuccess { wav ->
                     val saved = SpeechStore.saveAudio(applicationContext, wav)
+                    // صوت جديد غير محفوظ — الحفظ القديم كان للصوت اللي قبله.
+                    settings.isAudioSaved = false
                     val doneStatus = if (kind == "podcast") "خلص البودكاست ✔" else "خلص الصوت ✔"
                     SpeechStore.update {
                         it.copy(
@@ -403,11 +417,12 @@ class TranscriptionService : Service() {
                 SpeechState(running = false, kind = kind, status = "اتلغى توليد الصوت")
             }
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            stopSelf(startId)
             return
         }
         // الإشعار النهائي اتعرض 3 ثواني — السيرفس بيقف والإشعار بيختفي معاه.
-        stopSelf()
+        // stopSelf برقم البدء عشان لو مهمة جديدة بدأت في النص، متوقفش السيرفس وهي شغالة.
+        stopSelf(startId)
     }
 
     /** يوقف المهمة الشغالة (تفريغ أو صوت) والسيرفس (من زر "إلغاء" في الإشعار). */

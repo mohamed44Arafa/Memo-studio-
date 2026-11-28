@@ -93,4 +93,19 @@ class SettingsStore(context: Context) {
     var voiceProvider: String
         get() = prefs.getString("voice_provider", "auto") ?: "auto"
         set(value) = prefs.edit().putString("voice_provider", value).apply()
+
+    /** آخر مزوّد صوت نجح في التوليد — بيتجرّب الأول في الوضع التلقائي عشان منستناش على مزوّد معلّق. */
+    var lastWorkingVoiceProvider: String
+        get() = prefs.getString("last_working_voice_provider", "") ?: ""
+        set(value) = prefs.edit().putString("last_working_voice_provider", value).apply()
+
+    /** التفريغ الحالي محفوظ داخل التطبيق (يظهر تاني لما التطبيق يتفتح) — مش داونلود. */
+    var isTranscriptionSaved: Boolean
+        get() = prefs.getBoolean("transcription_saved", false)
+        set(value) = prefs.edit().putBoolean("transcription_saved", value).apply()
+
+    /** الصوت الحالي محفوظ داخل التطبيق (يظهر تاني لما التطبيق يتفتح) — مش داونلود. */
+    var isAudioSaved: Boolean
+        get() = prefs.getBoolean("audio_saved", false)
+        set(value) = prefs.edit().putBoolean("audio_saved", value).apply()
 }

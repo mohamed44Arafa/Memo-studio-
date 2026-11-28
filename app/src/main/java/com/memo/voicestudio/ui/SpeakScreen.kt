@@ -331,11 +331,17 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                 Text(
                     when {
                         viewModel.speakPhase == "script" -> "تجهيز الحوار…"
-                        viewModel.speakChunkTotal > 0 -> "المقطع ${viewModel.speakChunkCurrent} من ${viewModel.speakChunkTotal}"
                         else -> viewModel.speakStatus
                     },
                     fontSize = 16.sp
                 )
+                if (viewModel.speakChunkTotal > 0) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "المقطع ${viewModel.speakChunkCurrent} من ${viewModel.speakChunkTotal}",
+                        fontSize = 14.sp
+                    )
+                }
             }
             Spacer(Modifier.height(12.dp))
             OutlinedButton(
@@ -352,7 +358,7 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
             ) { Text("إعادة التوليد ↻", fontSize = 16.sp) }
         }
 
-        if (viewModel.speakStatus.isNotBlank()) {
+        if (!viewModel.isSpeaking && !viewModel.isExtracting && viewModel.speakStatus.isNotBlank()) {
             Spacer(Modifier.height(16.dp))
             Text(viewModel.speakStatus, fontSize = 16.sp)
         }
@@ -379,6 +385,11 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                     modifier = Modifier.weight(1f).height(56.dp)
                 ) { Text("حمّل الصوت ⬇", fontSize = 16.sp) }
             }
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { viewModel.toggleSaveAudio() },
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) { Text(if (viewModel.isAudioSaved) "✔ محفوظ في التطبيق" else "💾 حفظ في التطبيق", fontSize = 16.sp) }
         }
 
         if (viewModel.apiKey.isBlank()) {

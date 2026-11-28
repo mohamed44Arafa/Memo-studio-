@@ -239,6 +239,11 @@ fun TranscribeScreen(viewModel: MainViewModel, onGoToSpeak: () -> Unit) {
                 ) { Text("حفظ TXT", fontSize = 16.sp) }
             }
             Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { viewModel.toggleSaveTranscription() },
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) { Text(if (viewModel.isTranscriptionSaved) "✔ محفوظ في التطبيق" else "💾 حفظ في التطبيق", fontSize = 16.sp) }
+            Spacer(Modifier.height(12.dp))
             Button(
                 onClick = {
                     viewModel.useTranscriptionAsSpeakText()
