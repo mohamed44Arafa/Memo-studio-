@@ -65,6 +65,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var ocrSpaceApiKey by mutableStateOf(settings.ocrSpaceApiKey)
         private set
+    var ocrReader by mutableStateOf(settings.ocrReader)
+        private set
     var transcriptionProvider by mutableStateOf(settings.transcriptionProvider)
         private set
     var voiceProvider by mutableStateOf(settings.voiceProvider)
@@ -97,6 +99,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var cartesiaKeyTest by mutableStateOf<String?>(null)
         private set
     var isTestingCartesiaKey by mutableStateOf(false)
+        private set
+    var ocrSpaceKeyTest by mutableStateOf<String?>(null)
+        private set
+    var isTestingOcrSpaceKey by mutableStateOf(false)
         private set
 
     fun saveApiKey(value: String) {
@@ -149,6 +155,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         settings.voiceProvider = value
     }
 
+    fun saveOcrReader(value: String) {
+        ocrReader = value
+        settings.ocrReader = value
+    }
+
     /** المزود الفعّال للتفريغ: لو المختار مفتاحه اتمسح، يرجع تلقائي. */
     fun effectiveTranscriptionProvider(): String = when (transcriptionProvider) {
         "gemini" -> if (apiKey.isNotBlank()) "gemini" else "auto"
@@ -163,6 +174,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         "azure" -> if (azureApiKey.isNotBlank()) "azure" else "auto"
         "elevenlabs" -> if (elevenLabsApiKey.isNotBlank()) "elevenlabs" else "auto"
         "cartesia" -> if (cartesiaApiKey.isNotBlank()) "cartesia" else "auto"
+        else -> "auto"
+    }
+
+    /** القارئ الفعّال للصور: لو المختار مفتاحه اتمسح، يرجع تلقائي. */
+    fun effectiveOcrReader(): String = when (ocrReader) {
+        "gemini" -> if (apiKey.isNotBlank()) "gemini" else "auto"
+        "ocrspace" -> if (ocrSpaceApiKey.isNotBlank()) "ocrspace" else "auto"
         else -> "auto"
     }
 
@@ -293,6 +311,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun testOcrSpaceKey() {
+        viewModelScope.launch {
+            isTestingOcrSpaceKey = true
+            ocrSpaceKeyTest = null
+            val result = withContext(Dispatchers.IO) { repo.testOcrSpaceKey(ocrSpaceApiKey.trim()) }
+            ocrSpaceKeyTest = result.fold(
+                onSuccess = { "المفتاح شغال ✔" },
+                onFailure = { "المفتاح مش شغال: ${it.message ?: "خطأ غير معروف"}" }
+            )
+            isTestingOcrSpaceKey = false
+        }
+    }
+
     // ---------- التفريغ ----------
     var transFileName by mutableStateOf("")
         private set
@@ -329,11 +360,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         // اختيار المزوّد اليدوي بيرجع "تلقائي" مع كل فتحة للتطبيق (طلب ميمو):
         // لو اختار مزوّد معيّن وقفل البرنامج، لما يرجع يلاقيه تلقائي مش ثابت على اختياره.
-        if (transcriptionProvider != "auto" || voiceProvider != "auto") {
+        if (transcriptionProvider != "auto" || voiceProvider != "auto" || ocrReader != "auto") {
             transcriptionProvider = "auto"
             voiceProvider = "auto"
+            ocrReader = "auto"
             settings.transcriptionProvider = "auto"
             settings.voiceProvider = "auto"
+            settings.ocrReader = "auto"
         }
         // لو تفريغ خلص والتطبيق اتقفل واتفتح تاني، اعرض آخر نتيجة محفوظة.
         viewModelScope.launch(Dispatchers.IO) {
@@ -736,7 +769,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     window.map { page ->
                         async {
                             val bitmap = PdfText.renderPageToBitmap(file, page) ?: return@async
-                            repo.ocrImage(bitmap, apiKey.trim(), ocrSpaceApiKey.trim()) { speakStatus = it }
+                            repo.ocrImage(bitmap, apiKey.trim(), ocrSpaceApiKey.trim(), effectiveOcrReader()) { speakStatus = it }
                                 .onSuccess { if (it.isNotBlank()) pageTexts[page] = it }
                                 .onFailure { ocrFailed.set(true) }
                         }
@@ -772,7 +805,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
             isExtracting = true
             speakStatus = "بنقرأ النص من الصورة…"
-            val result = repo.ocrImage(bitmap, apiKey.trim(), ocrSpaceApiKey.trim()) { speakStatus = it }
+            val result = repo.ocrImage(bitmap, apiKey.trim(), ocrSpaceApiKey.trim(), effectiveOcrReader()) { speakStatus = it }
             withContext(Dispatchers.Main) {
                 isExtracting = false
                 result

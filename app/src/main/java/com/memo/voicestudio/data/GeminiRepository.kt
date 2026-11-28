@@ -236,6 +236,29 @@ class GeminiRepository(private val context: Context) {
         )
     }
 
+    /** اختبار مفتاح OCR.space بقراءة صورة صغيرة مولّدة (نص "ABC 123" على خلفية بيضاء).
+     * OCR.space مفيهوش صفحة فحص مجانية، فالاختبار قراءة حقيقية — بتستهلك قراءة واحدة من الـ 25 ألف في الشهر. */
+    suspend fun testOcrSpaceKey(key: String): Result<Unit> {
+        if (key.isBlank()) return Result.failure(IllegalStateException("حط مفتاح OCR.space الأول."))
+        return try {
+            val bitmap = Bitmap.createBitmap(400, 120, Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bitmap)
+            canvas.drawColor(android.graphics.Color.WHITE)
+            val paint = android.graphics.Paint().apply {
+                color = android.graphics.Color.BLACK
+                textSize = 48f
+                isAntiAlias = true
+            }
+            canvas.drawText("ABC 123", 20f, 75f, paint)
+            val text = ocrWithOcrSpace(bitmap, key.trim())
+            if (text.isNotBlank()) Result.success(Unit)
+            else Result.failure(IllegalStateException("الخدمة ردّت بس من غير نص — جرّب تاني"))
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Result.failure(e)
+        }
+    }
+
     /** فحص سريع لمفتاح عبر GET — المفتاح الغلط (401/403) رسالته غير رسالة الخدمة المشغولة (429/503). */
     private suspend fun testKeyEndpoint(
         url: String,
@@ -1325,25 +1348,34 @@ class GeminiRepository(private val context: Context) {
         bitmap: Bitmap,
         apiKey: String,
         ocrSpaceApiKey: String = "",
+        reader: String = "auto",
         onStatus: ((String) -> Unit)? = null
     ): Result<String> {
-        if (apiKey.isBlank()) {
-            return Result.failure(IllegalStateException("لا يوجد مفتاح — أدخل مفتاح Gemini من الإعدادات أولاً."))
+        if (apiKey.isBlank() && ocrSpaceApiKey.isBlank()) {
+            return Result.failure(IllegalStateException("لا يوجد مفتاح — أدخل مفتاح Gemini أو OCR.space من الإعدادات أولاً."))
         }
-        return try {
-            val text = try {
-                ocrImageOnce(bitmap, apiKey)
-            } catch (e: ServiceOverloadedException) {
-                // موديل الرؤية مفيهوش مزود بديل — نعيد المحاولة مرة واحدة بعد 65 ثانية (نفس نمط البودكاست).
-                onStatus?.invoke("Gemini مشغول دلوقتي — هنستنى شوية ونحاول تاني…")
-                delay(65_000)
-                ocrImageOnce(bitmap, apiKey)
-            }
-            Result.success(text.trim())
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            // (Build 42: قارئ احتياطي خارجي OCR.space — لو Gemini فشل، جرّبه قبل ما نستسلم.)
-            if (ocrSpaceApiKey.isNotBlank()) {
+        // ترتيب القراءة: المختار يدويًا الأول، وبعدين التاني لو فشل (نفس نمط مزودات الصوت والتفريغ).
+        val order = if (reader == "ocrspace" && ocrSpaceApiKey.isNotBlank()) listOf("ocrspace", "gemini") else listOf("gemini", "ocrspace")
+        var lastError: Exception? = null
+        for (which in order) {
+            if (which == "gemini") {
+                if (apiKey.isBlank()) continue
+                try {
+                    val text = try {
+                        ocrImageOnce(bitmap, apiKey)
+                    } catch (e: ServiceOverloadedException) {
+                        // موديل الرؤية مفيهوش مزود بديل — نعيد المحاولة مرة واحدة بعد 65 ثانية (نفس نمط البودكاست).
+                        onStatus?.invoke("Gemini مشغول دلوقتي — هنستنى شوية ونحاول تاني…")
+                        delay(65_000)
+                        ocrImageOnce(bitmap, apiKey)
+                    }
+                    return Result.success(text.trim())
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    lastError = e
+                }
+            } else {
+                if (ocrSpaceApiKey.isBlank()) continue
                 val fallback = try {
                     ocrWithOcrSpace(bitmap, ocrSpaceApiKey.trim())
                 } catch (ce: CancellationException) {
@@ -1355,16 +1387,17 @@ class GeminiRepository(private val context: Context) {
                 }
                 if (!fallback.isNullOrBlank()) return Result.success(fallback.trim())
             }
-            if (e is RateLimitException) {
-                val msg = if (e is ServiceOverloadedException) {
-                    "Gemini مشغول دلوقتي من كتر الطلب — استنى شوية وجرّب تاني."
-                } else {
-                    "وصلت للحد المجاني — جرّب تاني بعد شوية."
-                }
-                Result.failure(IllegalStateException(msg))
+        }
+        val e = lastError
+        return if (e is RateLimitException) {
+            val msg = if (e is ServiceOverloadedException) {
+                "Gemini مشغول دلوقتي من كتر الطلب — استنى شوية وجرّب تاني."
             } else {
-                Result.failure(IllegalStateException("مش قادر أقرأ الصورة: ${e.message ?: ""}"))
+                "وصلت للحد المجاني — جرّب تاني بعد شوية."
             }
+            Result.failure(IllegalStateException(msg))
+        } else {
+            Result.failure(IllegalStateException("مش قادر أقرأ الصورة: ${e?.message ?: ""}"))
         }
     }
 

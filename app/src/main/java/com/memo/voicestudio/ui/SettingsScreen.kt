@@ -324,6 +324,22 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onClick = { viewModel.saveOcrSpaceApiKey(ocrSpaceInput) },
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) { Text("حفظ مفتاح OCR.space", fontSize = 16.sp) }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = { viewModel.testOcrSpaceKey() },
+            enabled = !viewModel.isTestingOcrSpaceKey && viewModel.ocrSpaceApiKey.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("اختبر مفتاح OCR.space", fontSize = 16.sp) }
+        if (viewModel.isTestingOcrSpaceKey) {
+            Spacer(Modifier.height(12.dp))
+            CircularProgressIndicator()
+            Spacer(Modifier.height(8.dp))
+            Text("جارٍ الاختبار…", fontSize = 16.sp)
+        }
+        if (viewModel.ocrSpaceKeyTest != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(viewModel.ocrSpaceKeyTest ?: "", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
         Spacer(Modifier.height(8.dp))
         Text("من ocr.space ← مفتاح مجاني — ٢٥ ألف قراءة كل شهر، من غير بطاقة", fontSize = 14.sp)
 
@@ -413,6 +429,32 @@ fun SettingsScreen(viewModel: MainViewModel) {
         }
         Spacer(Modifier.height(4.dp))
         Text("تلقائي = يجرب Gemini الأول ويبدل لوحده لو خلص أو وقع.", fontSize = 14.sp)
+        Spacer(Modifier.height(16.dp))
+        Text("قارئ الصور", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = viewModel.effectiveOcrReader() == "auto",
+                onClick = { viewModel.saveOcrReader("auto") },
+                label = { Text("تلقائي", fontSize = 16.sp) }
+            )
+            if (viewModel.apiKey.isNotBlank()) {
+                FilterChip(
+                    selected = viewModel.effectiveOcrReader() == "gemini",
+                    onClick = { viewModel.saveOcrReader("gemini") },
+                    label = { Text("Gemini", fontSize = 16.sp) }
+                )
+            }
+            if (viewModel.ocrSpaceApiKey.isNotBlank()) {
+                FilterChip(
+                    selected = viewModel.effectiveOcrReader() == "ocrspace",
+                    onClick = { viewModel.saveOcrReader("ocrspace") },
+                    label = { Text("OCR.space", fontSize = 16.sp) }
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text("تلقائي = يجرب Gemini الأول، ولو فشل يجرب OCR.space. اختار OCR.space لو عايز تبدأ بيه على طول.", fontSize = 14.sp)
 
         Spacer(Modifier.height(24.dp))
         Text("الخصوصية", fontSize = 18.sp, fontWeight = FontWeight.Bold)
