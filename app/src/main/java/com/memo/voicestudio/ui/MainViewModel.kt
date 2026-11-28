@@ -193,6 +193,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         GeminiRepository.providerDisplayName(activeVoiceProvider.ifBlank { effectiveVoiceProvider() })
 
     fun saveGender(value: String) {
+        if (value == gender) return
         gender = value
         settings.gender = value
         val fallback = defaultVoice()
@@ -200,6 +201,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             voiceName = fallback
             settings.voiceName = fallback
         }
+        // (Build 46: تغيير الصوت بيلغي "آخر مزوّد شغال" — عشان التوليد الجاي يبدأ بـ Gemini الأول،
+        // وهو المزوّد الوحيد اللي فيه الـ 30 صوت؛ غير كده الصوت المختار مبيتسمعش لو البديل هو اللي شغال.)
+        settings.lastWorkingVoiceProvider = ""
+        restartSpeechWithNewVoice()
     }
 
     fun saveLanguage(value: String) {
@@ -213,8 +218,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveVoiceName(value: String) {
+        if (value == voiceName) return
         voiceName = value
         settings.voiceName = value
+        // (Build 46: تغيير الصوت بيلغي "آخر مزوّد شغال" — عشان التوليد الجاي يبدأ بـ Gemini الأول،
+        // وهو المزوّد الوحيد اللي فيه الـ 30 صوت؛ غير كده الصوت المختار مبيتسمعش لو البديل هو اللي شغال.)
+        settings.lastWorkingVoiceProvider = ""
+        restartSpeechWithNewVoice()
+    }
+
+    /** مهمة إعادة التوليد بعد تغيير الصوت — بتتلغي لو الصوت اتغيّر تاني قبل ما تبدأ. */
+    private var voiceRestartJob: Job? = null
+
+    /** لو توليد صوت شغال وغيّر الصوت (أو النوع)، يوقف التوليد الحالي ويبدأه من الأول بالصوت الجديد — النص زي ما هو، من غير إعادة إدخال أو استخراج الملف. البودكاست مستثنى (أصواته ثابتة: مضيف وضيف). */
+    private fun restartSpeechWithNewVoice() {
+        if (style == "podcast") return
+        if (!isSpeaking) return
+        cancelCurrentJob()
+        voiceRestartJob?.cancel()
+        voiceRestartJob = viewModelScope.launch {
+            // استنى لحد ما السيرفس يوقف فعلاً قبل ما نبدأ من جديد (بحد أقصى ~10 ثواني).
+            var waited = 0
+            while ((TranscriptionStore.state.value.running || SpeechStore.state.value.running) && waited < 100) {
+                delay(100)
+                waited++
+            }
+            speak()
+        }
     }
 
     fun defaultVoice(): String = if (gender == "male") "Charon" else "Kore"
@@ -410,9 +440,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val lastAudio = SpeechStore.loadLastAudio(getApplication())
                 if (lastAudio != null && !SpeechStore.state.value.running && settings.isAudioSaved) {
+                    // (Build 46: النص المحفوظ مع الصوت بيرجع معاه في خانة النص.)
+                    val savedText = try { savedSpeechTextFile.readText().trim() } catch (e: Exception) { "" }
                     withContext(Dispatchers.Main) {
                         audioFile = lastAudio
                         speakStatus = "الصوت جاهز ✔ — اضغط تشغيل"
+                        if (savedText.isNotBlank()) speakText = savedText
                     }
                 }
             } catch (e: Exception) {
@@ -564,13 +597,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             else "اتلغى الحفظ — مش هيظهر لما تفتح التطبيق تاني"
     }
 
+    /** ملف النص المحفوظ مع الصوت (بيتكتب لما يتداس "حفظ في التطبيق" في شاشة النطق). */
+    private val savedSpeechTextFile get() = File(getApplication<Application>().cacheDir, "saved-speech-text.txt")
+
     /** يحفظ الصوت الحالي داخل التطبيق (مش داونلود) — أو يلغي حفظه لو محفوظ. */
     fun toggleSaveAudio() {
         if (audioFile == null) return
         isAudioSaved = !isAudioSaved
         settings.isAudioSaved = isAudioSaved
-        speakStatus = if (isAudioSaved) "اتحفظ ✔ — هيفضل موجود لما تفتح التطبيق تاني"
-            else "اتلغى الحفظ — مش هيظهر لما تفتح التطبيق تاني"
+        // (Build 46: الحفظ بيحفظ النص كمان مش الصوت بس — بيتكتب في ملف جنب الصوت،
+        // وبيترجع معاه لما التطبيق يتفتح تاني.)
+        if (isAudioSaved) {
+            val textToSave = speakText.trim()
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    if (textToSave.isNotBlank()) savedSpeechTextFile.writeText(textToSave)
+                    else savedSpeechTextFile.delete()
+                } catch (e: Exception) { /* فشل حفظ النص ميمنعش حفظ الصوت */ }
+            }
+            speakStatus = "اتحفظ ✔ — الصوت والنص هيفضلوا موجودين لما تفتح التطبيق تاني"
+        } else {
+            viewModelScope.launch(Dispatchers.IO) {
+                try { savedSpeechTextFile.delete() } catch (e: Exception) { }
+            }
+            speakStatus = "اتلغى الحفظ — مش هيظهر لما تفتح التطبيق تاني"
+        }
     }
 
     fun useTranscriptionAsSpeakText() {
