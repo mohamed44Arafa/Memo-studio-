@@ -30,6 +30,7 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -608,6 +609,15 @@ class GeminiRepository(private val context: Context) {
             )
         }
         return try {
+            // (Build 41: ترتيب حي للمزودين داخل نفس التوليد — أول ما مزوّد ينجح في مقطع،
+            // باقي المقاطع تجربه الأول بدل ما كل مقطع يضيّع 40 ثانية على مزود واقع.
+            // بيتشارك بين المقاطع التلاتة اللي شغالة مع بعض.)
+            val liveOrder = AtomicReference(voiceOrder)
+            val liveOnProviderSuccess: (String) -> Unit = { p ->
+                val cur = liveOrder.get()
+                if (cur.isNotEmpty() && cur[0] != p) liveOrder.set(listOf(p) + cur.filter { it != p })
+                onProviderSuccess?.invoke(p)
+            }
             val chunks = splitTextForTts(text, style)
             // المقاطع بتتولد 3 في نفس الوقت (بدل واحد ورا التاني) — أسرع بكتير للنصوص الطويلة،
             // والنتيجة بتتجمع بنفس ترتيب النص الأصلي.
@@ -620,7 +630,7 @@ class GeminiRepository(private val context: Context) {
                 val bytes = speakChunkWithChain(
                     chunk, voiceName, languageCode, style,
                     apiKey, azureApiKey, azureRegion, elevenLabsApiKey, cartesiaApiKey, gender,
-                    voiceOrder, onStatus, onProvider, onProviderSuccess
+                    liveOrder.get(), onStatus, onProvider, liveOnProviderSuccess
                 )
                 onProgress?.invoke("audio", completed.incrementAndGet(), chunks.size)
                 bytes

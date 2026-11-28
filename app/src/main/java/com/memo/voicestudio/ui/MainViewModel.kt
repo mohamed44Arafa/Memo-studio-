@@ -624,12 +624,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // مراقبة مباشرة لحالة التوليد: بتنسخ حالة المتجر للشاشة كل ثانية
                 // لحد ما المهمة تخلص — لو المتابعة الأساسية وقفت، دي بتكمّل مكانها.
-                // (Build 40: إصلاح «isActive» — ماكانتش متعرفة هنا فكانت بتوقّع البناء.)
+                // (Build 41: المراقب كان بيخرج من أول لفة لو السيرفس لسه مبدأش،
+                // فماكانش بيوصل أي تحديث للشاشة — دلوقتي بيستنى لحد ما المهمة تبدأ فعلاً.)
                 speechWatchJob?.cancel()
                 speechWatchJob = viewModelScope.launch {
+                    var seenRunning = false
                     while (true) {
                         val st = SpeechStore.state.value
-                        isSpeaking = st.running
+                        if (st.running) seenRunning = true
+                        if (seenRunning) isSpeaking = st.running
                         isAudioSaved = settings.isAudioSaved
                         if (st.status.isNotBlank()) speakStatus = st.status
                         speakPhase = st.phase
@@ -637,7 +640,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         speakChunkTotal = st.totalChunks
                         if (st.provider.isNotBlank()) activeVoiceProvider = st.provider
                         if (st.audioPath.isNotBlank()) audioFile = File(st.audioPath)
-                        if (!st.running) break
+                        if (seenRunning && !st.running) break
                         delay(1000)
                     }
                 }

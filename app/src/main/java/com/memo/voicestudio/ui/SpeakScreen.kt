@@ -331,7 +331,10 @@ fun SpeakScreen(viewModel: MainViewModel, onGoToSettings: () -> Unit) {
                 Text(
                     when {
                         viewModel.speakPhase == "script" -> "تجهيز الحوار…"
-                        else -> viewModel.speakStatus
+                        viewModel.speakStatus.isNotBlank() -> viewModel.speakStatus
+                        // (Build 41: لو حالة الصوت فاضية لأي سبب والشاشة لسه شغالة،
+                        // يظهر كلام ثابت بدل ما الشاشة تبان واقفة من غير أي كلام.)
+                        else -> "بنولّد الصوت…"
                     },
                     fontSize = 16.sp
                 )
