@@ -624,6 +624,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // مراقبة مباشرة لحالة التوليد: بتنسخ حالة المتجر للشاشة كل ثانية
                 // لحد ما المهمة تخلص — لو المتابعة الأساسية وقفت، دي بتكمّل مكانها.
+                // (Build 39: إعادة رفع لنفس إصلاحات Build 38 بعد ما بناء #38 وقع على GitHub من غير خطأ في الكود.)
                 speechWatchJob?.cancel()
                 speechWatchJob = viewModelScope.launch {
                     while (isActive) {
