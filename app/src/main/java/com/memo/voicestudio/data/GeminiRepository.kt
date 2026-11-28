@@ -22,6 +22,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -119,6 +120,7 @@ class GeminiRepository(private val context: Context) {
         const val AZURE_EG_FEMALE_VOICE = "ar-EG-SalmaNeural"
         const val AZURE_EG_MALE_VOICE = "ar-EG-ShakirNeural"
         const val DEEPGRAM_STT_URL = "https://api.deepgram.com/v1/listen?model=nova-3&language=ar-EG&smart_format=true"
+        const val OCR_SPACE_URL = "https://api.ocr.space/parse/image"
         const val ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
         const val ELEVENLABS_TTS_MODEL = "eleven_turbo_v2_5"
         const val ELEVENLABS_MALE_VOICE = "pNInz6obpgDQGcFmaJgB"
@@ -1322,6 +1324,7 @@ class GeminiRepository(private val context: Context) {
     suspend fun ocrImage(
         bitmap: Bitmap,
         apiKey: String,
+        ocrSpaceApiKey: String = "",
         onStatus: ((String) -> Unit)? = null
     ): Result<String> {
         if (apiKey.isBlank()) {
@@ -1337,18 +1340,80 @@ class GeminiRepository(private val context: Context) {
                 ocrImageOnce(bitmap, apiKey)
             }
             Result.success(text.trim())
-        } catch (e: RateLimitException) {
-            val msg = if (e is ServiceOverloadedException) {
-                "Gemini مشغول دلوقتي من كتر الطلب — استنى شوية وجرّب تاني."
-            } else {
-                "وصلت للحد المجاني — جرّب تاني بعد شوية."
-            }
-            Result.failure(IllegalStateException(msg))
         } catch (e: Exception) {
-            // الإلغاء مش خطأ — لازم يعدّي زي ما هو عشان مفيش رسالة خطأ وهمية.
             if (e is CancellationException) throw e
-            Result.failure(IllegalStateException("مش قادر أقرأ الصورة: ${e.message ?: ""}"))
+            // (Build 42: قارئ احتياطي خارجي OCR.space — لو Gemini فشل، جرّبه قبل ما نستسلم.)
+            if (ocrSpaceApiKey.isNotBlank()) {
+                val fallback = try {
+                    ocrWithOcrSpace(bitmap, ocrSpaceApiKey.trim())
+                } catch (ce: CancellationException) {
+                    // إلغاء المستخدم يعدّي؛ مهلة OCR.space بس هي اللي تتعامل كفشل عادي.
+                    if (ce !is TimeoutCancellationException) throw ce
+                    null
+                } catch (ignored: Exception) {
+                    null
+                }
+                if (!fallback.isNullOrBlank()) return Result.success(fallback.trim())
+            }
+            if (e is RateLimitException) {
+                val msg = if (e is ServiceOverloadedException) {
+                    "Gemini مشغول دلوقتي من كتر الطلب — استنى شوية وجرّب تاني."
+                } else {
+                    "وصلت للحد المجاني — جرّب تاني بعد شوية."
+                }
+                Result.failure(IllegalStateException(msg))
+            } else {
+                Result.failure(IllegalStateException("مش قادر أقرأ الصورة: ${e.message ?: ""}"))
+            }
         }
+    }
+
+    /** قراءة نص من صورة عبر OCR.space (قارئ خارجي مجاني — احتياطي لما Gemini يفشل).
+     * تم التحقق منه 2026-11-28: بيقرأ العربي صح بمحرك 1 ولغة eng
+     * (قيمة ara مرفوضة E201 حتى بمحرك 1 مع المفتاح التجريبي، وeng بتقرأ العربي عادي). */
+    private suspend fun ocrWithOcrSpace(bitmap: Bitmap, apiKey: String): String {
+        // الخطة المجانية بتقبل صور أقل من 1 ميجا — نصغّر الصورة لحد ما تدخل.
+        var width = minOf(bitmap.width, 1600)
+        var quality = 80
+        var bytes: ByteArray
+        while (true) {
+            val h = (width.toFloat() / bitmap.width * bitmap.height).toInt().coerceAtLeast(1)
+            val scaled = Bitmap.createScaledBitmap(bitmap, width, h, true)
+            val stream = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, quality, stream)
+            bytes = stream.toByteArray()
+            if (bytes.size <= 1_000_000 || (width <= 800 && quality <= 50)) break
+            if (quality > 50) quality -= 10 else width = (width * 0.8).toInt()
+        }
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("apikey", apiKey)
+            .addFormDataPart("language", "eng")
+            .addFormDataPart("OCREngine", "1")
+            .addFormDataPart("scale", "true")
+            .addFormDataPart("isOverlayRequired", "false")
+            .addFormDataPart("file", "page.jpg", bytes.toRequestBody("image/jpeg".toMediaType()))
+            .build()
+        val request = Request.Builder()
+            .url(OCR_SPACE_URL)
+            .post(body)
+            .build()
+        val respText = try {
+            withTimeout(60_000) {
+                http.newCall(request).executeCancellable().use { resp ->
+                    if (!resp.isSuccessful) throw IllegalStateException("خطأ من OCR.space (${resp.code})")
+                    resp.body?.string().orEmpty()
+                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            throw IllegalStateException("OCR.space مردّش خلال 60 ثانية")
+        }
+        val json = JSONObject(respText)
+        if (json.optInt("OCRExitCode", 0) != 1) {
+            val err = json.optJSONArray("ErrorMessage")?.optString(0)?.takeIf { it.isNotBlank() } ?: "خطأ غير معروف"
+            throw IllegalStateException("خطأ من OCR.space: $err")
+        }
+        return json.optJSONArray("ParsedResults")?.optJSONObject(0)?.optString("ParsedText").orEmpty().trim()
     }
 
     /** قراءة نص من صورة — محاولة واحدة. 429 → حد مجاني، 503 → ضغط على الخدمة. */

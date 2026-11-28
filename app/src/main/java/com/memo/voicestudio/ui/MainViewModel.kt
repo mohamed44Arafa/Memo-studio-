@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -61,6 +62,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var elevenLabsApiKey by mutableStateOf(settings.elevenLabsApiKey)
         private set
     var cartesiaApiKey by mutableStateOf(settings.cartesiaApiKey)
+        private set
+    var ocrSpaceApiKey by mutableStateOf(settings.ocrSpaceApiKey)
         private set
     var transcriptionProvider by mutableStateOf(settings.transcriptionProvider)
         private set
@@ -129,6 +132,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveCartesiaApiKey(value: String) {
         cartesiaApiKey = value
         settings.cartesiaApiKey = value
+    }
+
+    fun saveOcrSpaceApiKey(value: String) {
+        ocrSpaceApiKey = value
+        settings.ocrSpaceApiKey = value
     }
 
     fun saveTranscriptionProvider(value: String) {
@@ -718,6 +726,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val pages = PdfText.pageCount(file)
             val maxPages = minOf(pages, 10)
             val pageTexts = arrayOfNulls<String>(maxPages)
+            // (Build 42: لو قراءة الصفحات فشلت من الخدمة نفسها، لازم الرسالة تقول كده
+            // بدل «جرّب صورة أوضح» — المشكلة مش في الصورة.)
+            val ocrFailed = AtomicBoolean(false)
             speakStatus = "بنقرأ صفحات PDF كصور…"
             for (window in (0 until maxPages).chunked(5)) {
                 speakStatus = "بنقرأ صفحات PDF كصور… (صفحة ${window.first() + 1} من $maxPages)"
@@ -725,8 +736,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     window.map { page ->
                         async {
                             val bitmap = PdfText.renderPageToBitmap(file, page) ?: return@async
-                            repo.ocrImage(bitmap, apiKey.trim()) { speakStatus = it }
+                            repo.ocrImage(bitmap, apiKey.trim(), ocrSpaceApiKey.trim()) { speakStatus = it }
                                 .onSuccess { if (it.isNotBlank()) pageTexts[page] = it }
+                                .onFailure { ocrFailed.set(true) }
                         }
                     }.awaitAll()
                 }
@@ -740,6 +752,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (out.isNotBlank()) {
                     speakText = out.toString().trim()
                     speakStatus = "اتقرأ النص من صفحات PDF ✔"
+                } else if (ocrFailed.get()) {
+                    speakStatus = "خدمة القراءة مشغولة دلوقتي — جرّب تاني بعد شوية"
                 } else {
                     speakStatus = "مش قادر أقرأ نص من الملف ده — جرّب صورة أوضح"
                 }
@@ -758,7 +772,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
             isExtracting = true
             speakStatus = "بنقرأ النص من الصورة…"
-            val result = repo.ocrImage(bitmap, apiKey.trim()) { speakStatus = it }
+            val result = repo.ocrImage(bitmap, apiKey.trim(), ocrSpaceApiKey.trim()) { speakStatus = it }
             withContext(Dispatchers.Main) {
                 isExtracting = false
                 result

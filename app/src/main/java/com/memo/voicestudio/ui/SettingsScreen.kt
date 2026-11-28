@@ -39,6 +39,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var deepgramInput by remember(viewModel.deepgramApiKey) { mutableStateOf(viewModel.deepgramApiKey) }
     var elevenLabsInput by remember(viewModel.elevenLabsApiKey) { mutableStateOf(viewModel.elevenLabsApiKey) }
     var cartesiaInput by remember(viewModel.cartesiaApiKey) { mutableStateOf(viewModel.cartesiaApiKey) }
+    var ocrSpaceInput by remember(viewModel.ocrSpaceApiKey) { mutableStateOf(viewModel.ocrSpaceApiKey) }
 
     Column(
         modifier = Modifier
@@ -306,6 +307,25 @@ fun SettingsScreen(viewModel: MainViewModel) {
         }
         Spacer(Modifier.height(8.dp))
         Text("من cartesia.ai ← Play ← API key — ٢٠ ألف نقطة كل شهر", fontSize = 14.sp)
+        Spacer(Modifier.height(20.dp))
+        Text("مفتاح OCR.space (قارئ احتياطي لصور الـ PDF)", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = ocrSpaceInput,
+            onValueChange = { ocrSpaceInput = it },
+            label = { Text("الصق مفتاح OCR.space هنا") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = { viewModel.saveOcrSpaceApiKey(ocrSpaceInput) },
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("حفظ مفتاح OCR.space", fontSize = 16.sp) }
+        Spacer(Modifier.height(8.dp))
+        Text("من ocr.space ← مفتاح مجاني — ٢٥ ألف قراءة كل شهر، من غير بطاقة", fontSize = 14.sp)
 
         Spacer(Modifier.height(24.dp))
         Text("اختيار المزوّد يدويًا", fontSize = 18.sp, fontWeight = FontWeight.Bold)

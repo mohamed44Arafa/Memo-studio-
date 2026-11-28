@@ -79,6 +79,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getString("cartesia_api_key", "") ?: ""
         set(value) = prefs.edit().putString("cartesia_api_key", value).apply()
 
+    /** مفتاح OCR.space (قارئ احتياطي لصور الـ PDF — مجاني، ٢٥ ألف قراءة في الشهر) */
+    var ocrSpaceApiKey: String
+        get() = prefs.getString("ocrspace_api_key", "") ?: ""
+        set(value) = prefs.edit().putString("ocrspace_api_key", value).apply()
+
     /** اسم صوت Gemini المختار (من قائمة الأصوات الرسمية) */
     var voiceName: String
         get() = prefs.getString("voice_name", "") ?: ""
