@@ -624,10 +624,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // مراقبة مباشرة لحالة التوليد: بتنسخ حالة المتجر للشاشة كل ثانية
                 // لحد ما المهمة تخلص — لو المتابعة الأساسية وقفت، دي بتكمّل مكانها.
-                // (Build 39: إعادة رفع لنفس إصلاحات Build 38 بعد ما بناء #38 وقع على GitHub من غير خطأ في الكود.)
+                // (Build 40: إصلاح «isActive» — ماكانتش متعرفة هنا فكانت بتوقّع البناء.)
                 speechWatchJob?.cancel()
                 speechWatchJob = viewModelScope.launch {
-                    while (isActive) {
+                    while (true) {
                         val st = SpeechStore.state.value
                         isSpeaking = st.running
                         isAudioSaved = settings.isAudioSaved
