@@ -20,6 +20,7 @@ import com.memo.voicestudio.SpeechStore
 import com.memo.voicestudio.data.GeminiRepository
 import com.memo.voicestudio.data.PdfText
 import com.memo.voicestudio.data.SettingsStore
+import com.memo.voicestudio.data.YouTubeCaptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -301,6 +302,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** آخر ملف تفريغ (للإعادة بنفس الملف من غير ما تختاره تاني). */
     private var lastTransFile: File? = null
     private var lastTransMime: String = ""
+    /** مهمة جلب الكابشن من لينك يوتيوب (عشان زرار الإيقاف يلغيها). */
+    private var linkJob: Job? = null
     /** اتعمل توليد صوت قبل كده في الجلسة دي (لزر "إعادة التوليد"). */
     var hasGeneratedSpeech by mutableStateOf(false)
         private set
@@ -416,11 +419,73 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         transcribe(file, lastTransMime)
     }
 
+    /**
+     * يجيب نص فيديو يوتيوب من اللينك (الكابشن/الترجمة) من غير تحميل الفيديو.
+     * النتيجة بتتحط في نفس مكان نتيجة التفريغ، فزرار "ابعته للنطق" بيشتغل عليها عادي.
+     * لو الفيديو مفيهوش كابشن، الرسالة بتقول كده بوضوح (والخطوة الجاية: Gemini يسمع الفيديو نفسه).
+     */
+    fun transcribeFromLink(url: String) {
+        if (isTranscribing) return
+        val videoId = YouTubeCaptions.extractVideoId(url)
+        if (videoId == null) {
+            transStatus = "اللينك مش صحيح — حط لينك فيديو يوتيوب"
+            return
+        }
+        linkJob?.cancel()
+        transFileName = "فيديو يوتيوب"
+        transResult = ""
+        transStatus = "بنجيب النص من اللينك…"
+        transSegmentCurrent = 0
+        transSegmentTotal = 0
+        activeTransProvider = ""
+        isTranscribing = true
+        linkJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val text = YouTubeCaptions.fetchCaptions(videoId)
+                TranscriptionStore.saveResult(getApplication(), text)
+                withContext(Dispatchers.Main) {
+                    transResult = text
+                    sharedText = text
+                    transStatus = "خلص التفريغ ✔ (من كابشن الفيديو)"
+                    isTranscribing = false
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                withContext(Dispatchers.Main + NonCancellable) {
+                    isTranscribing = false
+                    transStatus = if (e is YouTubeCaptions.NoCaptionsException) {
+                        "الفيديو ده مفيهوش كابشن — جرّب فيديو تاني، أو نزّل الفيديو وفرّغه من الملف"
+                    } else {
+                        "مش قادر أجيب النص من اللينك دلوقتي — اتأكد من النت واللينك وجرّب تاني"
+                    }
+                }
+            }
+            // ملاحظة: بنسيب مرجع المهمة زي ما هو بعد ما تخلص — كل الفحوصات
+            // بتستخدم isActive، فمهمة خلصانة مش هتتلغي ولا هتوقف حاجة.
+        }
+    }
+
     /** يوقف المهمة الشغالة (تفريغ أو توليد صوت أو استخراج نص) — بيبعت أمر إلغاء للسيرفس، أو يلغي مهمة الاستخراج. */
     fun cancelCurrentJob() {
         if (isExtracting) {
             cancelExtraction()
+        } else if (linkJob?.isActive == true) {
+            // جلب الكابشن من اللينك شغال في الـ ViewModel مش في السيرفس — إلغاؤه مباشر.
+            linkJob?.cancel()
+            linkJob = null
+            isTranscribing = false
+            transStatus = "اتلغى التفريغ"
         } else {
+            // الزرار يرد على الشاشة فورًا (يوقف اللف ويكتب "اتلغى") حتى لو أمر الإلغاء
+            // للسيرفس اتأخر أو موصلش — قبل كده الشاشة كانت بتفضل تلف كأن الزرار مش شغال.
+            if (isSpeaking) {
+                isSpeaking = false
+                speakStatus = "اتلغى توليد الصوت"
+            }
+            if (isTranscribing) {
+                isTranscribing = false
+                transStatus = "اتلغى التفريغ"
+            }
             TranscriptionService.cancel(getApplication())
         }
     }

@@ -1012,15 +1012,22 @@ class GeminiRepository(private val context: Context) {
             .addHeader("User-Agent", "memo-voice-studio")
             .post(ssml.toRequestBody("application/ssml+xml".toMediaType()))
             .build()
-        return withContext(Dispatchers.IO) {
-            http.newCall(request).executeCancellable().use { resp ->
-                if (resp.code == 429) throw RateLimitException()
-                if (resp.code == 503) throw ServiceOverloadedException()
-                if (!resp.isSuccessful) {
-                    throwServiceError("خطأ من Azure", resp.code, okHttpErrorDetail(resp))
+        // لو Azure علّق من غير رد، بعد 40 ثانية بنبدّل للبديل بدل ما نستنى 120 ثانية.
+        try {
+            return withTimeout(40_000) {
+                withContext(Dispatchers.IO) {
+                    http.newCall(request).executeCancellable().use { resp ->
+                        if (resp.code == 429) throw RateLimitException()
+                        if (resp.code == 503) throw ServiceOverloadedException()
+                        if (!resp.isSuccessful) {
+                            throwServiceError("خطأ من Azure", resp.code, okHttpErrorDetail(resp))
+                        }
+                        resp.body?.bytes() ?: throw IllegalStateException("Azure رجّع صوت فاضي")
+                    }
                 }
-                resp.body?.bytes() ?: throw IllegalStateException("Azure رجّع صوت فاضي")
             }
+        } catch (e: TimeoutCancellationException) {
+            throw ProviderFailureException("Azure مردّش خلال 40 ثانية — بنكمّل مع البديل…")
         }
     }
 
@@ -1061,23 +1068,30 @@ class GeminiRepository(private val context: Context) {
             .addHeader("xi-api-key", elevenLabsKey)
             .post(json.toRequestBody("application/json".toMediaType()))
             .build()
-        return withContext(Dispatchers.IO) {
-            http.newCall(request).executeCancellable().use { resp ->
-                if (resp.code == 429) throw RateLimitException()
-                if (resp.code == 503) throw ServiceOverloadedException()
-                if (resp.code == 401 || resp.code == 403) {
-                    throw IllegalStateException("مفتاح ElevenLabs مش شغال — اتأكد من نسخه صح من الإعدادات.")
+        // لو ElevenLabs علّق من غير رد، بعد 40 ثانية بنبدّل للبديل بدل ما نستنى 120 ثانية.
+        try {
+            return withTimeout(40_000) {
+                withContext(Dispatchers.IO) {
+                    http.newCall(request).executeCancellable().use { resp ->
+                        if (resp.code == 429) throw RateLimitException()
+                        if (resp.code == 503) throw ServiceOverloadedException()
+                        if (resp.code == 401 || resp.code == 403) {
+                            throw IllegalStateException("مفتاح ElevenLabs مش شغال — اتأكد من نسخه صح من الإعدادات.")
+                        }
+                        if (resp.code == 402) {
+                            throw CreditExhaustedException("رصيد ElevenLabs المجاني خلص — بييجي ١٠ آلاف نقطة جديدة كل شهر.")
+                        }
+                        if (!resp.isSuccessful) {
+                            throwServiceError("خطأ من ElevenLabs", resp.code, okHttpErrorDetail(resp))
+                        }
+                        val bytes = resp.body?.bytes() ?: throw IllegalStateException("ElevenLabs رجّع صوت فاضي")
+                        if (bytes.isEmpty()) throw IllegalStateException("ElevenLabs رجّع صوت فاضي")
+                        bytes
+                    }
                 }
-                if (resp.code == 402) {
-                    throw CreditExhaustedException("رصيد ElevenLabs المجاني خلص — بييجي ١٠ آلاف نقطة جديدة كل شهر.")
-                }
-                if (!resp.isSuccessful) {
-                    throwServiceError("خطأ من ElevenLabs", resp.code, okHttpErrorDetail(resp))
-                }
-                val bytes = resp.body?.bytes() ?: throw IllegalStateException("ElevenLabs رجّع صوت فاضي")
-                if (bytes.isEmpty()) throw IllegalStateException("ElevenLabs رجّع صوت فاضي")
-                bytes
             }
+        } catch (e: TimeoutCancellationException) {
+            throw ProviderFailureException("ElevenLabs مردّش خلال 40 ثانية — بنكمّل مع البديل…")
         }
     }
 
@@ -1117,23 +1131,30 @@ class GeminiRepository(private val context: Context) {
             .addHeader("Cartesia-Version", "2024-06-10")
             .post(json.toRequestBody("application/json".toMediaType()))
             .build()
-        return withContext(Dispatchers.IO) {
-            http.newCall(request).executeCancellable().use { resp ->
-                if (resp.code == 429) throw RateLimitException()
-                if (resp.code == 503) throw ServiceOverloadedException()
-                if (resp.code == 401 || resp.code == 403) {
-                    throw IllegalStateException("مفتاح Cartesia مش شغال — اتأكد من نسخه صح من الإعدادات.")
+        // لو Cartesia علّق من غير رد، بعد 40 ثانية بنبدّل للبديل بدل ما نستنى 120 ثانية.
+        try {
+            return withTimeout(40_000) {
+                withContext(Dispatchers.IO) {
+                    http.newCall(request).executeCancellable().use { resp ->
+                        if (resp.code == 429) throw RateLimitException()
+                        if (resp.code == 503) throw ServiceOverloadedException()
+                        if (resp.code == 401 || resp.code == 403) {
+                            throw IllegalStateException("مفتاح Cartesia مش شغال — اتأكد من نسخه صح من الإعدادات.")
+                        }
+                        if (resp.code == 402) {
+                            throw CreditExhaustedException("رصيد Cartesia المجاني خلص — بييجي ٢٠ ألف نقطة جديدة كل شهر.")
+                        }
+                        if (!resp.isSuccessful) {
+                            throwServiceError("خطأ من Cartesia", resp.code, okHttpErrorDetail(resp))
+                        }
+                        val bytes = resp.body?.bytes() ?: throw IllegalStateException("Cartesia رجّع صوت فاضي")
+                        if (bytes.isEmpty()) throw IllegalStateException("Cartesia رجّع صوت فاضي")
+                        bytes
+                    }
                 }
-                if (resp.code == 402) {
-                    throw CreditExhaustedException("رصيد Cartesia المجاني خلص — بييجي ٢٠ ألف نقطة جديدة كل شهر.")
-                }
-                if (!resp.isSuccessful) {
-                    throwServiceError("خطأ من Cartesia", resp.code, okHttpErrorDetail(resp))
-                }
-                val bytes = resp.body?.bytes() ?: throw IllegalStateException("Cartesia رجّع صوت فاضي")
-                if (bytes.isEmpty()) throw IllegalStateException("Cartesia رجّع صوت فاضي")
-                bytes
             }
+        } catch (e: TimeoutCancellationException) {
+            throw ProviderFailureException("Cartesia مردّش خلال 40 ثانية — بنكمّل مع البديل…")
         }
     }
 

@@ -20,6 +20,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -46,6 +47,7 @@ fun TranscribeScreen(viewModel: MainViewModel, onGoToSpeak: () -> Unit) {
     val scroll = rememberScrollState()
 
     var pickError by remember { mutableStateOf("") }
+    var linkText by remember { mutableStateOf("") }
 
     fun handlePicked(uri: Uri?, defaultName: String) {
         if (uri == null) return
@@ -104,6 +106,29 @@ fun TranscribeScreen(viewModel: MainViewModel, onGoToSpeak: () -> Unit) {
             enabled = !viewModel.isTranscribing,
             modifier = Modifier.fillMaxWidth().height(56.dp)
         ) { Text("🎵  اختار ملف صوتي", fontSize = 18.sp) }
+
+        Spacer(Modifier.height(20.dp))
+        Text("أو من لينك يوتيوب:", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "الصق لينك فيديو يوتيوب، والتطبيق يجيب نص الفيديو من الكابشن من غير ما تحمّل الفيديو. (لازم الفيديو يكون فيه كابشن).",
+            fontSize = 16.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = linkText,
+            onValueChange = { linkText = it },
+            label = { Text("لينك فيديو يوتيوب") },
+            singleLine = true,
+            enabled = !viewModel.isTranscribing,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = { viewModel.transcribeFromLink(linkText.trim()) },
+            enabled = !viewModel.isTranscribing && linkText.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().height(56.dp)
+        ) { Text("🔗  جيب النص من اللينك", fontSize = 18.sp) }
 
         if (viewModel.transFileName.isNotBlank()) {
             Spacer(Modifier.height(16.dp))

@@ -221,6 +221,17 @@ class TranscriptionService : Service() {
             if (transcribeJob?.isActive == true || speechJob?.isActive == true) {
                 cancelCurrentJob()
             } else {
+                // مفيش مهمة شغالة فعلاً — ممكن تكون خلصت أو وقعت من غير ما تحدّث الحالة،
+                // فبنرجّع الحالة بنفسنا عشان الشاشة متفضلش تلف على الفاضي.
+                if (currentJobKind == JOB_SPEECH) {
+                    SpeechStore.update {
+                        SpeechState(running = false, kind = currentSpeechKind, status = "اتلغى توليد الصوت")
+                    }
+                } else {
+                    TranscriptionStore.update {
+                        TranscriptionState(running = false, fileName = currentFileName, status = "اتلغى التفريغ")
+                    }
+                }
                 stopSelf()
             }
             return START_NOT_STICKY
