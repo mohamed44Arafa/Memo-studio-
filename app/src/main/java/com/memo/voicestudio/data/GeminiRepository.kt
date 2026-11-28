@@ -716,11 +716,11 @@ class GeminiRepository(private val context: Context) {
                     }
                     "azure" -> {
                         val azureVoice = if (gender == "male") AZURE_EG_MALE_VOICE else AZURE_EG_FEMALE_VOICE
-                        speakChunkWithAzure(chunk, azureVoice, azureApiKey, azureRegion)
+                        speakChunkWithAzure(chunk, azureVoice, azureApiKey, azureRegion, style)
                     }
                     "elevenlabs" -> {
                         val voiceId = if (gender == "male") ELEVENLABS_MALE_VOICE else ELEVENLABS_FEMALE_VOICE
-                        speakChunkWithElevenLabs(chunk, voiceId, elevenLabsApiKey)
+                        speakChunkWithElevenLabs(chunk, voiceId, elevenLabsApiKey, style)
                     }
                     "cartesia" -> speakChunkWithCartesia(chunk, cartesiaApiKey)
                     else -> continue
@@ -1048,9 +1048,16 @@ class GeminiRepository(private val context: Context) {
         chunk: String,
         azureVoice: String,
         azureKey: String,
-        azureRegion: String
+        azureRegion: String,
+        style: String = ""
     ): ByteArray {
-        val ssml = "<speak version='1.0' xml:lang='ar-EG'><voice xml:lang='ar-EG' name='$azureVoice'>${escapeXml(chunk)}</voice></speak>"
+        // أسلوب السرد القصصي في Azure: إيقاع أبطأ ووقفة بعد كل جملة (SSML).
+        val inner = if (style == "story") {
+            "<prosody rate='slow'>" + storyBreaks(escapeXml(chunk)) + "</prosody>"
+        } else {
+            escapeXml(chunk)
+        }
+        val ssml = "<speak version='1.0' xml:lang='ar-EG'><voice xml:lang='ar-EG' name='$azureVoice'>$inner</voice></speak>"
         val request = Request.Builder()
             .url("https://$azureRegion.tts.speech.microsoft.com/cognitiveservices/v1")
             .addHeader("Ocp-Apim-Subscription-Key", azureKey)
@@ -1101,13 +1108,16 @@ class GeminiRepository(private val context: Context) {
     private suspend fun speakChunkWithElevenLabs(
         chunk: String,
         voiceId: String,
-        elevenLabsKey: String
+        elevenLabsKey: String,
+        style: String = ""
     ): ByteArray {
+        // أسلوب السرد القصصي في ElevenLabs: ثبات أقل = تعبير وتنويع أكتر في النبرة.
+        val stability = if (style == "story") 0.3 else 0.5
         val json = gson.toJson(
             mapOf(
                 "text" to chunk,
                 "model_id" to ELEVENLABS_TTS_MODEL,
-                "voice_settings" to mapOf("stability" to 0.5, "similarity_boost" to 0.75)
+                "voice_settings" to mapOf("stability" to stability, "similarity_boost" to 0.75)
             )
         )
         val request = Request.Builder()
@@ -1221,6 +1231,10 @@ class GeminiRepository(private val context: Context) {
         return out.toByteArray()
     }
 
+    /** وقفات بعد الجمل لأسلوب السرد القصصي في Azure (SSML) — النص متحوّل لـ XML الأول فالوسوم دي سليمة. */
+    private fun storyBreaks(escaped: String): String =
+        escaped.replace(Regex("([.!؟])\\s+"), "$1<break time='500ms'/> ")
+
     private fun escapeXml(text: String): String =
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -1311,9 +1325,9 @@ class GeminiRepository(private val context: Context) {
             else
                 "ألقِ الأبيات التالية باللغة العربية الفصحى بإلقاء شعري بطيء وواضح، مع وقفة قصيرة بعد كل بيت:\n"
             "story" -> if (egyptian)
-                "احكِ النص التالي باللهجة المصرية بأسلوب سرد قصصي مشوق، مع وقفات قصيرة بعد كل جملة ونبرة أعلى عند الأسئلة:\n"
+                "احكِ النص التالي باللهجة المصرية بصوت راوٍ بشري دافئ ومشوق زي الحكواتي: اقرأ ببطء، وقف وقفة واضحة بعد كل جملة ووقفة أطول قبل الأحداث المشوقة، وخلّي صوتك يعلى مع الحماس والأسئلة وينزل مع الحزن والجد، وغيّر نبرتك شوية لكل شخصية بتتكلم، وأكّد على الكلمات اللي فيها مشاعر، ومتستعجلش ومتقراش بنبرة واحدة مسطحة:\n"
             else
-                "اقرأ النص التالي باللغة العربية الفصحى بأسلوب سرد قصصي مشوق، مع وقفات قصيرة بعد كل جملة ونبرة أعلى عند الأسئلة:\n"
+                "احكِ النص التالي باللغة العربية الفصحى بصوت راوٍ بشري دافئ ومشوق زي الحكواتي: اقرأ ببطء، وقف وقفة واضحة بعد كل جملة ووقفة أطول قبل الأحداث المشوقة، وخلّي صوتك يعلى مع الحماس والأسئلة وينزل مع الحزن والجد، وغيّر نبرتك شوية لكل شخصية بتتكلم، وأكّد على الكلمات اللي فيها مشاعر، ومتستعجلش ومتقراش بنبرة واحدة مسطحة:\n"
             else -> if (egyptian)
                 "اقرأ النص التالي بصوت طبيعي واضح باللهجة المصرية، بنبرة هادئة ومخارج حروف سليمة:\n"
             else
